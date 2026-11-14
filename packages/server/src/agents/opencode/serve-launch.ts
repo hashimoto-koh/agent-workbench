@@ -25,6 +25,10 @@ import type { CliLocation } from '../locate.js';
 import { OPENCODE_SESSION_ID_PATTERN } from './ids.js';
 import type { ServeEndpoint } from './serve-process.js';
 
+export interface AttachArgsOptions {
+  includeUsername?: boolean;
+}
+
 export interface ServeLaunchDeps {
   /** `OpenCodeServeProcess.ensure`. */
   ensure(): Promise<ServeEndpoint>;
@@ -32,10 +36,19 @@ export interface ServeLaunchDeps {
   createSession(endpoint: ServeEndpoint, directory: string): Promise<string>;
   /** Empieza a seguir el estado de esa sesion con el cliente de ese endpoint. */
   track(endpoint: ServeEndpoint, sessionId: string, directory: string): void;
+  /** Si true, attach agrega `--username <endpoint.username>` (necesario en GenCode). */
+  includeUsername?: boolean;
+  /** Nombre del servidor para los mensajes de error (por defecto 'OpenCode'). */
+  serverLabel?: string;
 }
 
 /** Los argumentos de `attach`, con el prefijo del shim delante. */
-export function attachArgs(location: CliLocation, endpoint: ServeEndpoint, sessionId: string): string[] {
+export function attachArgs(
+  location: CliLocation,
+  endpoint: ServeEndpoint,
+  sessionId: string,
+  options?: AttachArgsOptions,
+): string[] {
   if (endpoint.protocol === 2) {
     // 2.2.7 acepta basic auth en la URL. Como --password en V1, solo es
     // la contraseña transitoria del servidor propio; el entorno no cambia.
@@ -44,7 +57,11 @@ export function attachArgs(location: CliLocation, endpoint: ServeEndpoint, sessi
     url.password = endpoint.password;
     return [...location.prefixArgs, '--server', url.toString(), '--session', sessionId];
   }
-  return [...location.prefixArgs, 'attach', endpoint.url, '--dir', '.', '--session', sessionId, '--password', endpoint.password];
+  const args = [...location.prefixArgs, 'attach', endpoint.url, '--dir', '.', '--session', sessionId, '--password', endpoint.password];
+  if (options?.includeUsername && endpoint.username) {
+    args.push('--username', endpoint.username);
+  }
+  return args;
 }
 
 function reason(error: unknown): string {
@@ -57,8 +74,9 @@ function reason(error: unknown): string {
  */
 export function launchWithServe(deps: ServeLaunchDeps, input: LaunchInput): Promise<LaunchPlan> {
   const { resumeSessionId } = input;
+  const label = deps.serverLabel ?? 'OpenCode';
   if (resumeSessionId !== null && !OPENCODE_SESSION_ID_PATTERN.test(resumeSessionId)) {
-    throw new Error('Invalid OpenCode session id.');
+    throw new Error(`Invalid ${label} session id.`);
   }
 
   return (async (): Promise<LaunchPlan> => {
@@ -66,7 +84,7 @@ export function launchWithServe(deps: ServeLaunchDeps, input: LaunchInput): Prom
     try {
       endpoint = await deps.ensure();
     } catch (error) {
-      throw new Error(`Couldn't start the OpenCode server: ${reason(error)}`);
+      throw new Error(`Couldn't start the ${label} server: ${reason(error)}`);
     }
 
     let sessionId = resumeSessionId;
@@ -74,14 +92,14 @@ export function launchWithServe(deps: ServeLaunchDeps, input: LaunchInput): Prom
       try {
         sessionId = await deps.createSession(endpoint, input.cwd);
       } catch (error) {
-        throw new Error(`The OpenCode server didn't create the session: ${reason(error)}`);
+        throw new Error(`The ${label} server didn't create the session: ${reason(error)}`);
       }
     }
 
     deps.track(endpoint, sessionId, input.cwd);
     return {
       file: input.location.file,
-      args: attachArgs(input.location, endpoint, sessionId),
+      args: attachArgs(input.location, endpoint, sessionId, { includeUsername: deps.includeUsername }),
       session: { kind: 'known', sessionId },
     };
   })();

@@ -216,5 +216,6 @@ server.listen(0, '127.0.0.1', () => {
   const { port } = server.address();
   if (mode === 'silent') return;
   const host = mode === 'wide' ? '0.0.0.0' : '127.0.0.1';
-  process.stdout.write(`opencode server listening on http://${host}:${port}\n`);
+  const command = process.env.FAKE_SERVE_COMMAND_NAME ?? 'opencode';
+  process.stdout.write(`${command} server listening on http://${host}:${port}\n`);
 });

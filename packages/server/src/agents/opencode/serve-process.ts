@@ -106,6 +106,10 @@ export interface ServeProcessOptions {
   /** La carpeta vacia donde corre. Por defecto `<tmp>/agent-workbench/opencode-serve`. */
   cwd?: string;
   timers?: ServeTimers;
+  /** Nombre del comando en la linea de escucha (por defecto 'opencode'). */
+  listeningCommandName?: string;
+  /** Nombre para los logs de depuración (por defecto 'opencode-serve'). */
+  debugName?: string;
 }
 
 /**
@@ -120,9 +124,18 @@ export function serveArgs(location: CliLocation): string[] {
 const LISTENING_LINE = /opencode server listening on (https?):\/\/([^\s/:]+|\[[^\]\s]+\]):(\d{1,5})\b/;
 
 /** Esquema, host y puerto de la linea de escucha, sea el host que sea; null si la linea no es esa. */
-function matchListeningLine(line: string, protocol: OpenCodeProtocol = 1): { scheme: string; host: string; port: number } | null {
+function matchListeningLine(
+  line: string,
+  protocol: OpenCodeProtocol = 1,
+  commandName: string = 'opencode',
+): { scheme: string; host: string; port: number } | null {
   // `match` y no el metodo `exec` de la expresion: el caso 2 de check-opencode-db lo toma por SQL fuera de `sql.ts`.
-  const match = line.match(protocol === 2 ? /(?:^|\n)server listening on (https?):\/\/([^\s/:]+|\[[^\]\s]+\]):(\d{1,5})\b/ : LISTENING_LINE);
+  const regex = protocol === 2
+    ? /(?:^|\n)server listening on (https?):\/\/([^\s/:]+|\[[^\]\s]+\]):(\d{1,5})\b/
+    : (commandName === 'opencode'
+        ? LISTENING_LINE
+        : new RegExp(`(?:^|\\n)${commandName} server listening on (https?):\\/\\/([^\\s/:]+|\\[[^\\]\\s]+\\]):(\\d{1,5})\\b`));
+  const match = line.match(regex);
   if (match === null) return null;
   const port = Number(match[3]);
   if (!Number.isInteger(port) || port <= 0 || port > 65_535) return null;
@@ -130,11 +143,15 @@ function matchListeningLine(line: string, protocol: OpenCodeProtocol = 1): { sch
 }
 
 /**
- * La URL de la linea `opencode server listening on http://127.0.0.1:<puerto>`.
+ * La URL de la linea `<comando> server listening on http://127.0.0.1:<puerto>`.
  * null si el host es otro (`0.0.0.0`, `localhost`), o si la linea no es esa.
  */
-export function parseListeningLine(line: string, protocol: OpenCodeProtocol = 1): string | null {
-  const found = matchListeningLine(line, protocol);
+export function parseListeningLine(
+  line: string,
+  protocol: OpenCodeProtocol = 1,
+  commandName: string = 'opencode',
+): string | null {
+  const found = matchListeningLine(line, protocol, commandName);
   if (found === null || found.scheme !== 'http' || found.host !== OPENCODE_SERVE_HOST) return null;
   return `http://${OPENCODE_SERVE_HOST}:${found.port}`;
 }
@@ -142,6 +159,11 @@ export function parseListeningLine(line: string, protocol: OpenCodeProtocol = 1)
 /** Donde corre por defecto: una carpeta propia, vacia. */
 export function defaultServeCwd(): string {
   return path.join(tmpdir(), 'agent-workbench', 'opencode-serve');
+}
+
+/** Donde corre por defecto GenCode: una carpeta propia, vacia. */
+export function defaultGenCodeServeCwd(): string {
+  return path.join(tmpdir(), 'agent-workbench', 'gencode-serve');
 }
 
 /** Un arranque que fallo, con un texto que ya no trae la contrasena. */
@@ -167,6 +189,8 @@ export class OpenCodeServeProcess {
   private readonly startTimeoutMs: number;
   private readonly idleStopMs: number;
   private readonly cwd: string;
+  private readonly listeningCommandName: string;
+  private readonly debugName: string;
   /** El proceso vigente: el que se esta arrancando o el que escucha. */
   private running: Running | null = null;
   private starting: Promise<ServeEndpoint> | null = null;
@@ -184,6 +208,8 @@ export class OpenCodeServeProcess {
     this.startTimeoutMs = options.startTimeoutMs ?? OPENCODE_SERVE_START_TIMEOUT_MS;
     this.idleStopMs = options.idleStopMs ?? OPENCODE_SERVE_IDLE_STOP_MS;
     this.cwd = options.cwd ?? defaultServeCwd();
+    this.listeningCommandName = options.listeningCommandName ?? 'opencode';
+    this.debugName = options.debugName ?? 'opencode-serve';
   }
 
   /**
@@ -258,7 +284,7 @@ export class OpenCodeServeProcess {
     const username = protocol === 2 ? OPENCODE_SERVE_DEFAULT_USERNAME : env['OPENCODE_SERVER_USERNAME'] || OPENCODE_SERVE_DEFAULT_USERNAME;
     const args = serveArgs(this.options.location);
     // Sin argumentos en el log (A4): la regla es la misma para todo log nuevo, aunque estos no traigan la contrasena.
-    debugLog('opencode-serve', 'launching serve');
+    debugLog(this.debugName, 'launching serve');
 
     let child: ChildProcess;
     try {
@@ -322,17 +348,17 @@ export class OpenCodeServeProcess {
 
       const onLine = (line: string): void => {
         if (settled) return;
-        const url = parseListeningLine(line, protocol);
+        const url = parseListeningLine(line, protocol, this.listeningCommandName);
         if (url !== null) {
           settled = true;
           this.timers.clearTimeout(timer);
           running.endpoint = { url, username, password: this.password, ...(protocol === 2 ? { protocol } : {}) };
-          debugLog('opencode-serve', `listening on ${url}`);
+          debugLog(this.debugName, `listening on ${url}`);
           this.scheduleIdleStop();
           resolve(running.endpoint);
           return;
         }
-        const other = matchListeningLine(line, protocol);
+        const other = matchListeningLine(line, protocol, this.listeningCommandName);
         if (other !== null) fail(`listens on ${other.scheme}://${other.host} and not on http://${OPENCODE_SERVE_HOST}`);
       };
 
@@ -363,7 +389,7 @@ export class OpenCodeServeProcess {
         const endpoint = running.endpoint;
         if (endpoint === null) return;
         const exit: ServeExit = { requested: running.stopRequested };
-        debugLog('opencode-serve', `exited (${how}${exit.requested ? '' : ', without the app asking'})`);
+        debugLog(this.debugName, `exited (${how}${exit.requested ? '' : ', without the app asking'})`);
         if (this.running === null) this.cancelIdleStop();
         for (const listener of [...this.exitListeners]) {
           try {
@@ -401,7 +427,7 @@ export class OpenCodeServeProcess {
     this.idleTimer = this.timers.setTimeout(() => {
       this.idleTimer = null;
       if (this.retained > 0 || this.disposed) return;
-      debugLog('opencode-serve', 'no OpenCode tabs: shutting down');
+      debugLog(this.debugName, `no ${this.listeningCommandName} tabs: shutting down`);
       this.stop();
     }, this.idleStopMs);
   }
