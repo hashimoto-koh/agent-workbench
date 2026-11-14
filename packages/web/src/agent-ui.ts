@@ -196,6 +196,19 @@ function claudeCodeShortcuts(): readonly Shortcut[] {
   ];
 }
 
+function gencodeShortcuts(): readonly Shortcut[] {
+  return [
+    { keys: 'Esc Esc', description: t('agent.shortcuts.opencode.interrupt') },
+    { keys: 'Tab / Shift + Tab', description: t('agent.shortcuts.opencode.cycleAgent') },
+    { keys: 'Ctrl + P', description: t('agent.shortcuts.opencode.commandList') },
+    { keys: t('agent.shortcuts.leaderThen', { key: 'M' }), description: t('agent.shortcuts.opencode.model') },
+    { keys: t('agent.shortcuts.leaderThen', { key: 'N' }), description: t('agent.shortcuts.opencode.newSession') },
+    { keys: 'Ctrl + J', description: t('agent.shortcuts.opencode.newline') },
+    { keys: 'Ctrl + C', description: t('agent.shortcuts.opencode.clearInput') },
+    { keys: 'Ctrl + V', description: t('agent.shortcuts.opencode.paste') },
+  ];
+}
+
 /**
  * Una entrada por CLI con adaptador.
  *
@@ -266,6 +279,16 @@ export const AGENT_UI: Record<AgentId, AgentUi> = {
     savesModelChoice: false,
     effortCommand: '/thinking',
     // "Manually compact the session context", en su lista de comandos (1.3.0).
+    compactCommand: '/compact',
+  },
+  gencode: {
+    shortLabel: 'GN',
+    get shortcuts() {
+      return gencodeShortcuts();
+    },
+    shortcutsNote: null,
+    instructionsFile: 'AGENTS.md',
+    savesModelChoice: false,
     compactCommand: '/compact',
   },
 };

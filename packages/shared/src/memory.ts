@@ -37,7 +37,7 @@ export const MEMORY_INSTRUCTION_FILES = ['AGENTS.md', 'CLAUDE.md'] as const;
 
 export type MemoryInstructionFile = (typeof MEMORY_INSTRUCTION_FILES)[number];
 
-export const MEMORY_AGENT_IDS = ['claude-code', 'codex', 'antigravity', 'opencode', 'pi'] as const;
+export const MEMORY_AGENT_IDS = ['claude-code', 'codex', 'antigravity', 'opencode', 'pi', 'gencode'] as const;
 export type MemoryAgentId = (typeof MEMORY_AGENT_IDS)[number];
 
 /** Nombre visible de cada CLI. Es un dato de compatibilidad, no una marca. */
@@ -47,6 +47,7 @@ export const MEMORY_AGENT_LABELS: Record<MemoryAgentId, string> = {
   antigravity: 'Antigravity',
   opencode: 'OpenCode',
   pi: 'Pi',
+  gencode: 'GenCode',
 };
 
 /*

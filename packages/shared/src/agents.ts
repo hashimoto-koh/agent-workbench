@@ -44,7 +44,7 @@ import { parseServerText, type ServerText } from './server-text.js';
  * igual que una CLI no instalada. El orden es el de preferencia: con varias
  * instaladas, la que se abre por defecto sigue siendo la primera.
  */
-export const AGENT_IDS = ['claude-code', 'codex', 'opencode', 'antigravity', 'pi'] as const;
+export const AGENT_IDS = ['claude-code', 'codex', 'opencode', 'antigravity', 'pi', 'gencode'] as const;
 export type AgentId = (typeof AGENT_IDS)[number];
 
 /** Tope conservador para argumentos largos en los shims de Windows de Codex. */

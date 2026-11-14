@@ -19,7 +19,7 @@ import type { AgentAdapter, CliLocation } from './adapter.js';
 import { createAntigravityAdapter } from './antigravity/index.js';
 import { createClaudeCodeAdapter } from './claude-code/index.js';
 import { createCodexAdapter } from './codex/index.js';
-import { createOpenCodeAdapter } from './opencode/index.js';
+import { createOpenCodeAdapter, createGenCodeAdapter } from './opencode/index.js';
 import { createPiAdapter } from './pi/index.js';
 
 export interface RegisteredAgent {
@@ -304,6 +304,7 @@ export function createAgentRegistry(disabled: Iterable<AgentId> = []): AgentRegi
     createOpenCodeAdapter({ serveEnv: () => registry.composedEnvironment(process.env) }),
     createAntigravityAdapter(),
     createPiAdapter(),
+    createGenCodeAdapter({ serveEnv: () => registry.composedEnvironment(process.env) }),
   ], disabled);
   return registry;
 }

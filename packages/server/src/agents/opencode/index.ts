@@ -28,8 +28,9 @@
  */
 
 import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
-import type { AgentCapabilities } from '@agent-workbench/shared';
+import { homedir, tmpdir } from 'node:os';
+import path from 'node:path';
+import type { AgentCapabilities, AgentId, ServerText } from '@agent-workbench/shared';
 import type {
   AgentAdapter,
   AgentInput,
@@ -48,7 +49,13 @@ import { createOpenCodeV2History, readV2PartCall, readV2PromptChoice } from './h
 import { openCodeProtocol, type OpenCodeProtocol } from './compatibility.js';
 import { versionedHistory } from './versioned-history.js';
 import { OPENCODE_SESSION_ID_PATTERN } from './ids.js';
-import { resolveOpenCodePaths, type OpenCodePaths } from './paths.js';
+import {
+  resolveOpenCodeFamilyPaths,
+  OPENCODE_PATH_OPTIONS,
+  GENCODE_PATH_OPTIONS,
+  type OpenCodePaths,
+  type OpenCodeFamilyPathOptions,
+} from './paths.js';
 import { OpenCodeServeClient, type ServeClientOptions } from './serve-client.js';
 import { createServeLaunchHook } from './serve-hook.js';
 import { launchWithServe } from './serve-launch.js';
@@ -65,7 +72,11 @@ export const OPENCODE_COMMAND = 'opencode';
 export const OPENCODE_INSTALL_URL = 'https://opencode.ai/docs/';
 
 /** Nombre para los avisos y el `label` de la base. */
-const OPENCODE_LABEL = 'OpenCode';
+export const OPENCODE_LABEL = 'OpenCode';
+
+export const GENCODE_COMMAND = 'gencode';
+export const GENCODE_INSTALL_URL = 'https://www.genspark.ai';
+export const GENCODE_LABEL = 'GenCode';
 
 /**
  * Cuanto sin consultas antes de soltar la base. Con un lector abierto, OpenCode
@@ -169,6 +180,89 @@ export const OPENCODE_INPUT: AgentInput = {
   transcriptReference: 'quoted-path',
 };
 
+export const GENCODE_CAPABILITIES_PHASE5: AgentCapabilities = {
+  sessionIdAtLaunch: false,
+  resume: false,
+  statusSource: false,
+  readySignal: false,
+  permissionCycle: null,
+  codexPermissions: false,
+  models: null,
+  efforts: null,
+  questionCards: false,
+  imagesByPath: null,
+  fileMentions: null,
+  rewind: false,
+  contextWindowSource: null,
+  plans: false,
+  waitingBlocksSubmit: false,
+  forceSend: false,
+  editQueue: false,
+  scheduledSend: false,
+  codexNativeQueue: false,
+  moveToWorktree: false,
+  readOnlyLaunch: null,
+};
+
+export const GENCODE_INPUT: AgentInput = {
+  imageReference: null,
+  pieceGapMs: 400,
+  pasteMarkers: true,
+  enterSeparately: true,
+  interruptPresses: 2,
+  transcriptReference: 'quoted-path',
+};
+
+export interface OpenCodeFamilyConfig {
+  id: AgentId;
+  label: string;
+  command: string;
+  installUrl: string;
+  pathOptions: OpenCodeFamilyPathOptions;
+  serveCwdName: string;
+  serveDefaultUsername: string;
+  listeningCommandName: string;
+  capabilities: AgentCapabilities;
+  input: AgentInput;
+  includeUsername?: boolean;
+  historyOnly?: boolean;
+  serveEnv?: () => Record<string, string>;
+  cleanTerminalEnv?: (env: Record<string, string>) => void;
+  missingMessage?: () => ServerText;
+  startupHistoryNote?: (cliAvailable: boolean) => string | null;
+  defaults?: () => Promise<any | null>;
+}
+
+export const OPENCODE_FAMILY_CONFIG: OpenCodeFamilyConfig = {
+  id: 'opencode',
+  label: OPENCODE_LABEL,
+  command: OPENCODE_COMMAND,
+  installUrl: OPENCODE_INSTALL_URL,
+  pathOptions: OPENCODE_PATH_OPTIONS,
+  serveCwdName: 'opencode-serve',
+  serveDefaultUsername: 'opencode',
+  listeningCommandName: 'opencode',
+  capabilities: OPENCODE_CAPABILITIES,
+  input: OPENCODE_INPUT,
+  includeUsername: false,
+  historyOnly: false,
+};
+
+export const GENCODE_FAMILY_CONFIG: OpenCodeFamilyConfig = {
+  id: 'gencode',
+  label: GENCODE_LABEL,
+  command: GENCODE_COMMAND,
+  installUrl: GENCODE_INSTALL_URL,
+  pathOptions: GENCODE_PATH_OPTIONS,
+  serveCwdName: 'gencode-serve',
+  serveDefaultUsername: 'opencode',
+  listeningCommandName: 'gencode',
+  capabilities: GENCODE_CAPABILITIES_PHASE5,
+  input: GENCODE_INPUT,
+  includeUsername: true,
+  historyOnly: true,
+};
+
 export interface OpenCodeAdapterOptions {
   /** Para el chequeo. Por defecto, el entorno, el home y la plataforma del proceso. */
   env?: NodeJS.ProcessEnv;
@@ -199,27 +293,40 @@ function copyEnvironment(base: NodeJS.ProcessEnv): Record<string, string> {
   return env;
 }
 
-export function createOpenCodeAdapter(options: OpenCodeAdapterOptions = {}): AgentAdapter {
+export function createOpenCodeFamilyAdapter(
+  config: OpenCodeFamilyConfig,
+  options: OpenCodeAdapterOptions = {},
+): AgentAdapter {
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
   const sqlite = options.sqlite ?? loadSqlite;
-  const paths: OpenCodePaths = resolveOpenCodePaths(env, options.home ?? homedir(), platform);
+  const paths: OpenCodePaths = resolveOpenCodeFamilyPaths(config.pathOptions, env, options.home ?? homedir(), platform);
   const db = new ReadOnlyDatabase(paths.dbFile ?? '', {
     idleCloseMs: OPENCODE_DB_IDLE_CLOSE_MS,
     required: OPENCODE_REQUIRED_COLUMNS,
-    label: OPENCODE_LABEL,
+    label: config.label,
     sqlite,
   });
   const signal = new DbChangeSignal(
     paths.dbFile === null || paths.walFile === null ? null : { db: paths.dbFile, wal: paths.walFile },
   );
   const catalog = new ModelCatalog(paths.modelsFile);
-  const serveEnv = options.serveEnv ?? (() => copyEnvironment(process.env));
+  const serveEnv = options.serveEnv ?? (() => {
+    const base = copyEnvironment(process.env);
+    if (config.id === 'gencode') {
+      delete base['OPENCODE_DB'];
+      if (!config.pathOptions.openCodeModelsEnv) {
+        delete base['OPENCODE_MODELS_PATH'];
+        delete base['OPENCODE_MODELS_URL'];
+      }
+    }
+    return base;
+  });
   const schemaDb = new ReadOnlyDatabase(paths.dbFile ?? '', {
-    idleCloseMs: OPENCODE_DB_IDLE_CLOSE_MS, required: [], label: OPENCODE_LABEL, sqlite,
+    idleCloseMs: OPENCODE_DB_IDLE_CLOSE_MS, required: [], label: config.label, sqlite,
   });
   const v2Db = new ReadOnlyDatabase(paths.dbFile ?? '', {
-    idleCloseMs: OPENCODE_DB_IDLE_CLOSE_MS, required: OPENCODE_V2_REQUIRED_COLUMNS, label: OPENCODE_LABEL, sqlite,
+    idleCloseMs: OPENCODE_DB_IDLE_CLOSE_MS, required: OPENCODE_V2_REQUIRED_COLUMNS, label: config.label, sqlite,
   });
   let locatedProtocol: OpenCodeProtocol | null = null;
   let lastV2History = false;
@@ -265,7 +372,14 @@ export function createOpenCodeAdapter(options: OpenCodeAdapterOptions = {}): Age
   const serveFor = (location: CliLocation): OpenCodeServeProcess => {
     if (serve !== null) return serve;
     // La plataforma del proceso, no la de `options`: decide como se mata un proceso de verdad.
-    const created = new OpenCodeServeProcess({ ...options.serveProcess, location, baseEnv: serveEnv });
+    const created = new OpenCodeServeProcess({
+      ...options.serveProcess,
+      location,
+      baseEnv: serveEnv,
+      listeningCommandName: config.listeningCommandName,
+      debugName: `${config.id}-serve`,
+      cwd: config.serveCwdName ? path.join(tmpdir(), 'agent-workbench', config.serveCwdName) : undefined,
+    });
     /*
       Un `serve` que muere sin que la app lo pidiera deja cada TUI enganchado a
       un puerto muerto, sin terminar (M2, medido): sus pestanas pasan a offline
@@ -309,23 +423,27 @@ export function createOpenCodeAdapter(options: OpenCodeAdapterOptions = {}): Age
   });
 
   return {
-    id: 'opencode',
-    label: OPENCODE_LABEL,
-    command: OPENCODE_COMMAND,
-    installUrl: OPENCODE_INSTALL_URL,
-    capabilities: OPENCODE_CAPABILITIES,
-    input: OPENCODE_INPUT,
+    id: config.id,
+    label: config.label,
+    command: config.command,
+    installUrl: config.installUrl,
+    capabilities: config.capabilities,
+    input: config.input,
 
     // `--version` es seguro: medido, no toca la base ni escribe log.
     async locate() {
-      const location = await locateCommand(OPENCODE_COMMAND);
+      if (config.historyOnly) return null;
+      const location = await locateCommand(config.command);
       locatedProtocol = location === null ? null : openCodeProtocol(location.version);
       return location;
     },
 
-    missingMessage: () => commandNotFoundMessage(OPENCODE_COMMAND, OPENCODE_INSTALL_URL),
+    missingMessage: () => config.missingMessage
+      ? config.missingMessage()
+      : commandNotFoundMessage(config.command, config.installUrl),
 
     async beforeLaunch(input, terminalEnv) {
+      if (config.cleanTerminalEnv) config.cleanTerminalEnv(terminalEnv);
       if (openCodeProtocol(input.location.version) !== 2) return;
       // La contraseña transitoria viaja en --server. Las variables de un
       // servidor ajeno prevalecen sobre esa URL en 2.2.7: quitarlas solo de
@@ -345,12 +463,17 @@ export function createOpenCodeAdapter(options: OpenCodeAdapterOptions = {}): Age
      * pone OpenCode.
      */
     launch(input: LaunchInput): Promise<LaunchPlan> {
+      if (config.historyOnly) {
+        return Promise.reject(new Error(`${config.label} launch is disabled in Phase 5`));
+      }
       locatedProtocol = openCodeProtocol(input.location.version);
       return launchWithServe(
         {
           ensure: () => serveFor(input.location).ensure(),
           createSession: (endpoint, directory) => clientFor(endpoint).createSession(directory),
           track: (endpoint, sessionId, directory) => status.track(sessionId, directory, clientFor(endpoint)),
+          includeUsername: config.includeUsername,
+          serverLabel: config.label,
         },
         input,
       );
@@ -393,7 +516,7 @@ export function createOpenCodeAdapter(options: OpenCodeAdapterOptions = {}): Age
       del ultimo mensaje del usuario. Sin `serve`, o sin poder leer la base, no
       se manda nada: sin el agente, OpenCode usaria el predeterminado.
     */
-    scheduled: {
+    scheduled: config.capabilities.scheduledSend ? {
       kind: 'api',
       confirmTimeoutMs: OPENCODE_SCHEDULED_CONFIRM_MS,
       deliver: async (target, text) => {
@@ -408,7 +531,7 @@ export function createOpenCodeAdapter(options: OpenCodeAdapterOptions = {}): Age
         }
         return client.promptAsync(target.cwd, target.sessionId, text, choice);
       },
-    },
+    } : undefined,
 
     /*
       Hito 55 (§11.17): pasar a una rama aparte cambia la carpeta de la sesion
@@ -416,10 +539,10 @@ export function createOpenCodeAdapter(options: OpenCodeAdapterOptions = {}): Age
       sin llevarse cambios. Antes de cada mudanza se busca la ruta en la
       especificacion del `serve`: si una version la quita, no se toca nada.
     */
-    sessionMove: {
+    sessionMove: config.capabilities.moveToWorktree ? {
       available: (location, target) => withServe(location, (client) => client.canMoveSession(target.cwd)),
       move: (location, target, to) => withServe(location, (client) => client.moveSession(target.cwd, target.sessionId, to)),
-    },
+    } : undefined,
 
     /**
      * La base que se lee, para el arranque. Solo si hay algo que decir, para que
@@ -435,15 +558,16 @@ export function createOpenCodeAdapter(options: OpenCodeAdapterOptions = {}): Age
      * existe hasta la primera consulta, asi que se mira el archivo.
      */
     startupHistoryNote(cliAvailable: boolean): string | null {
-      if (env['OPENCODE_DB'] === ':memory:') return 'in memory (nothing to read)';
+      if (config.startupHistoryNote) return config.startupHistoryNote(cliAvailable);
+      if (config.pathOptions.openCodeDbEnv && env['OPENCODE_DB'] === ':memory:') return 'in memory (nothing to read)';
       if (paths.dbFile === null) return null;
       const present = existsSync(paths.dbFile);
-      if ('unavailable' in sqlite()) return present || cliAvailable ? `not read: ${sqliteUnavailableText(OPENCODE_LABEL)}` : null;
+      if ('unavailable' in sqlite()) return present || cliAvailable ? `not read: ${sqliteUnavailableText(config.label)}` : null;
       return present ? `${paths.dbFile} (read-only)` : null;
     },
 
     // `opencode.json` no se abre (regla 2.1).
-    defaults: () => Promise.resolve(null),
+    defaults: () => config.defaults ? config.defaults() : Promise.resolve(null),
 
     /**
      * Las cuatro carpetas de OpenCode: datos (la base, `auth.json`),
@@ -468,4 +592,12 @@ export function createOpenCodeAdapter(options: OpenCodeAdapterOptions = {}): Age
       return serve?.dispose() ?? Promise.resolve();
     },
   };
+}
+
+export function createOpenCodeAdapter(options: OpenCodeAdapterOptions = {}): AgentAdapter {
+  return createOpenCodeFamilyAdapter(OPENCODE_FAMILY_CONFIG, options);
+}
+
+export function createGenCodeAdapter(options: OpenCodeAdapterOptions = {}): AgentAdapter {
+  return createOpenCodeFamilyAdapter(GENCODE_FAMILY_CONFIG, options);
 }

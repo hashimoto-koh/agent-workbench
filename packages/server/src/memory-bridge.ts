@@ -60,6 +60,7 @@ import {
 import { writeAtomically } from './atomic-write.js';
 import { InvalidPathError, resolveInside } from './path-guard.js';
 import { projectSlugFor } from './agents/claude-code/paths.js';
+import { resolveGenCodePaths } from './agents/opencode/paths.js';
 import { readCheckout } from './worktrees/checkout.js';
 
 /** Un fallo que se le explica al usuario. El texto va como clave: la frase la arma la web (§6.23). */
@@ -909,6 +910,8 @@ function computeReach(
     // esta (medido que con los dos carga solo el primero; el respaldo, segun su
     // documentacion, §16.11).
     entry('pi', openCode.reaches, openCode.via),
+    // GenCode: Phase 6 de medición hasta confirmar lectura de AGENTS.md.
+    entry('gencode', false, serverText('memoryViaNoBlock', { file: 'AGENTS.md' })),
   ];
 }
 
@@ -1040,7 +1043,11 @@ async function nativeMemoryFolders(cwd: string, home: string): Promise<string[]>
  * Los fragmentos para lo global. Solo texto: el servidor no lee ni escribe
  * ninguno de esos archivos.
  */
-function buildGlobalFragments(home: string): MemoryGlobalFragment[] {
+function buildGlobalFragments(
+  home: string,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): MemoryGlobalFragment[] {
   const windows = process.platform === 'win32';
   const globalFile = path.join(home, ...GLOBAL_MEMORY_RELATIVE.split('/'));
   const hardLink = (link: string): string =>
@@ -1098,6 +1105,14 @@ function buildGlobalFragments(home: string): MemoryGlobalFragment[] {
       kind: 'command',
       text: hardLink(piTarget),
       note: hardLinkNote,
+    },
+    {
+      agent: 'gencode',
+      label: MEMORY_AGENT_LABELS.gencode,
+      target: path.join(resolveGenCodePaths(env, home, platform).configDir, 'opencode.jsonc'),
+      kind: 'json',
+      text: `"instructions": ["${homeSlashes}/${GLOBAL_MEMORY_RELATIVE}"]`,
+      note: serverText('memoryNoteOpenCode'),
     },
   ];
 }

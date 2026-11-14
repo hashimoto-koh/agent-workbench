@@ -821,7 +821,7 @@ await adapter.locate();
   // Hito 29 (D18, §11.4): como nombra cada CLI el transcript de una continuacion.
   const registered = Object.fromEntries(AGENT_IDS.map((id) => [id, appRegistry.adapter(id).input.transcriptReference]));
   check('29 transcriptReference de cada adaptador: Claude Code con @, las demas entre comillas',
-    sameShape(registered, { 'claude-code': 'at-quoted', codex: 'quoted-path', opencode: 'quoted-path', antigravity: 'quoted-path', pi: 'quoted-path' }),
+    sameShape(registered, { 'claude-code': 'at-quoted', codex: 'quoted-path', opencode: 'quoted-path', antigravity: 'quoted-path', pi: 'quoted-path', gencode: 'quoted-path' }),
     JSON.stringify(registered));
   // Hito 29, paso 5 (D12): OpenCode por `serve`, que publica su espera; con Claude Code no cambia nada.
   // Y Pi desde el hito 43: su dialogo de confianza aceptaria el Enter de un mensaje.
@@ -852,6 +852,7 @@ await adapter.locate();
       opencode: { source: 'session', forceSend: null },
       antigravity: { source: 'app', forceSend: 'alt-m' },
       pi: { source: 'app', forceSend: 'interrupt-and-resend' },
+      gencode: { source: 'session', forceSend: null },
     }), JSON.stringify(queues));
   /*
     §6.35.1: sacar la cola para editarla, solo donde se midio. Pi solo en
@@ -940,6 +941,7 @@ await adapter.locate();
       opencode: null,
       antigravity: { mode: 'plan', guard: 'cli' },
       pi: { mode: null, guard: 'tools' },
+      gencode: null,
     }), JSON.stringify(declared));
 
   const location = { resolvedPath: '/bin/x', file: '/bin/x', prefixArgs: [], version: null };

@@ -491,8 +491,8 @@ const img2 = process.platform === 'win32' ? 'C:\\Temp\\pegadas x\\p-2.png' : '/t
 // B6. Ids. OpenCode entra detras en el hito 26, sin mover a las dos de antes.
 {
   const { AGENT_IDS, MEMORY_AGENT_IDS } = shared;
-  check('B6 AGENT_IDS es claude-code, despues codex, opencode, antigravity (hito 27) y pi (hito 43)',
-    same([...AGENT_IDS], ['claude-code', 'codex', 'opencode', 'antigravity', 'pi']), AGENT_IDS.join(','));
+  check('B6 AGENT_IDS es claude-code, despues codex, opencode, antigravity (hito 27), pi (hito 43) y gencode',
+    same([...AGENT_IDS], ['claude-code', 'codex', 'opencode', 'antigravity', 'pi', 'gencode']), AGENT_IDS.join(','));
   check('B6 AGENT_IDS contenido en MEMORY_AGENT_IDS', AGENT_IDS.every((id) => MEMORY_AGENT_IDS.includes(id)));
 }
 
@@ -3714,8 +3714,8 @@ const rejectsOn = async (run) => {
 // E1. En el registro de la app.
 {
   const registry = createAgentRegistry();
-  check('E1 el registro de la app trae claude-code y despues codex (y opencode desde el hito 26, antigravity desde el 27, pi al final desde el 43)',
-    same(registry.all().map(({ adapter }) => adapter.id), ['claude-code', 'codex', 'opencode', 'antigravity', 'pi']));
+  check('E1 el registro de la app trae claude-code y despues codex (y opencode desde el hito 26, antigravity desde el 27, pi al final desde el 43, y gencode)',
+    same(registry.all().map(({ adapter }) => adapter.id), ['claude-code', 'codex', 'opencode', 'antigravity', 'pi', 'gencode']));
   check('E1 sin ninguna instalada, ninguna por defecto', registry.defaultAgent() === null);
   const codexInfo = registry.list().find((info) => info.id === 'codex');
   check('E1 hello: codex ausente con su texto y sus capacidades',
@@ -3787,8 +3787,8 @@ const rejectsOn = async (run) => {
   const registry = createAgentRegistry();
   const claudeText = registry.adapter('claude-code').missingMessage();
   const none = summarizeAgents(registry.list(), true);
-  check('A6 cartel sin ninguna: el de claude-code de siempre y "tambien funciona con: Codex, OpenCode, Antigravity CLI, Pi"',
-    none.cliAvailable === false && none.cliMissingMessage === `${es(claudeText)}\nTambién funciona con: Codex, OpenCode, Antigravity CLI, Pi`, show(none));
+  check('A6 cartel sin ninguna: el de claude-code de siempre y "tambien funciona con: Codex, OpenCode, Antigravity CLI, Pi, GenCode"',
+    none.cliAvailable === false && none.cliMissingMessage === `${es(claudeText)}\nTambién funciona con: Codex, OpenCode, Antigravity CLI, Pi, GenCode`, show(none));
   registry.get('claude-code').location = { resolvedPath: '/bin/claude', file: '/bin/claude', prefixArgs: [], version: '2.1.270' };
   const onlyClaude = summarizeAgents(registry.list(), true);
   const alone = new AgentRegistry([createClaudeCodeAdapter()]);
