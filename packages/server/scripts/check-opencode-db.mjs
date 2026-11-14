@@ -1470,7 +1470,7 @@ const historyOf = (file, extra = {}) => {
 
   const { createAgentRegistry } = await import('../src/agents/registry.ts');
   const registry = createAgentRegistry();
-  check('13 registro: claude-code, codex, opencode, antigravity y pi, en ese orden', same(registry.all().map(({ adapter: a }) => a.id), ['claude-code', 'codex', 'opencode', 'antigravity', 'pi']));
+  check('13 registro: claude-code, codex, opencode, antigravity, pi y gencode, en ese orden', same(registry.all().map(({ adapter: a }) => a.id), ['claude-code', 'codex', 'opencode', 'antigravity', 'pi', 'gencode']));
   registry.get('opencode').location = { resolvedPath: '/bin/opencode', file: '/bin/opencode', prefixArgs: [], version: '1.18.30' };
   check('13 con opencode sola, es la de por defecto', registry.defaultAgent() === 'opencode');
   registry.get('codex').location = { resolvedPath: '/bin/codex', file: '/bin/codex', prefixArgs: [], version: 'codex-cli 0.154.0' };

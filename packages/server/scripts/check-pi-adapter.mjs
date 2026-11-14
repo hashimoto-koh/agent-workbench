@@ -1109,7 +1109,7 @@ const newCatalog = (extra = {}) => new catalogModule.PiModelCatalog({ storeFile:
 {
   const adapter = piIndex.createPiAdapter({ locate: { findInPath: async () => null } });
   check('P10 id, etiqueta, comando y sitio', adapter.id === 'pi' && adapter.label === 'Pi' && adapter.command === 'pi' && adapter.installUrl === 'https://pi.dev');
-  check('P10 AGENT_IDS lo nombra al final y la memoria lo conoce', shared.AGENT_IDS.at(-1) === 'pi' && shared.MEMORY_AGENT_IDS.includes('pi') && shared.MEMORY_AGENT_LABELS.pi === 'Pi');
+  check('P10 AGENT_IDS lo nombra y la memoria lo conoce', shared.AGENT_IDS.includes('pi') && shared.MEMORY_AGENT_IDS.includes('pi') && shared.MEMORY_AGENT_LABELS.pi === 'Pi');
   check('P10 las capacidades, contra un literal',
     same(piIndex.PI_BASE_CAPABILITIES, {
       sessionIdAtLaunch: true,
@@ -1202,8 +1202,10 @@ const newCatalog = (extra = {}) => new catalogModule.PiModelCatalog({ storeFile:
 
   const { createAgentRegistry } = await import('../src/agents/registry.ts');
   const registry = createAgentRegistry();
-  check('P10 el registro de la app la trae al final', registry.all().at(-1).adapter.id === 'pi' && registry.all().length === 5);
-  check('P10 sin ninguna instalada, Pi no es la de por defecto ni aparece disponible', registry.defaultAgent() === null && registry.list().at(-1).available === false && registry.list().at(-1).statusLine === null);
+  const piEntry = registry.all().find((e) => e.adapter.id === 'pi');
+  const piInfo = registry.list().find((e) => e.id === 'pi');
+  check('P10 el registro de la app incluye a Pi', piEntry !== undefined && registry.all().length === 6);
+  check('P10 sin ninguna instalada, Pi no es la de por defecto ni aparece disponible', registry.defaultAgent() === null && piInfo?.available === false && piInfo?.statusLine === null);
   check('P10 el selector de carpetas no lista ~/.pi', registry.protectedDirs().includes(path.join(home, '.pi')));
   check('P10 el entorno compuesto no gana ninguna variable por Pi', Object.keys(registry.composedEnvironment({ PATH: 'p', A: 'b' })).every((key) => key === 'PATH' || key === 'A'));
   await registry.disposeAll();

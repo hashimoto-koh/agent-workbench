@@ -1071,6 +1071,13 @@ const pathInMessage = (message) => /"([^"]+\.md)"/.exec(message)?.[1] ?? null;
     ui.continueTargets(all, 'claude-code', true, true).length === 0 && ui.continueTargets([], 'claude-code', false, true).length === 0,
     ids(ui.continueTargets(onlyClaude, 'claude-code', false, true)));
 
+  const withGenCode = [...all, info('pi', 'Pi', true), info('gencode', 'GenCode', true)];
+  check('H10 con GenCode instalado: se ofrece como destino desde las demás',
+    ids(ui.continueTargets(withGenCode, 'claude-code')) === 'codex,opencode,antigravity,pi,gencode' &&
+    ids(ui.continueTargets(withGenCode, 'opencode')) === 'claude-code,codex,antigravity,pi,gencode');
+  check('H10 con origen GenCode: ofrece todas las demás instaladas en orden',
+    ids(ui.continueTargets(withGenCode, 'gencode')) === 'claude-code,codex,opencode,antigravity,pi');
+
   // Hito 56: la fila que no se retoma con un clic se continua en una sesion nueva, tambien con su misma CLI.
   const nativeRow = { storage: 'native', worktree: null };
   const goneBranch = { branch: 'feat/x', exists: false, reopenable: false };

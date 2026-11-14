@@ -187,7 +187,7 @@ const shared = await import('@agent-workbench/shared');
   for (const entry of registry.all()) entry.location = { resolvedPath: 'C:\\bin\\x.exe', file: 'C:\\bin\\x.exe', prefixArgs: [], version: '1' };
   const listed = registry.list();
   check('15 registry.list(): statusLine null en cada CLI salvo antigravity',
-    listed.length === 5 && listed.filter((a) => a.id !== 'antigravity').every((a) => a.statusLine === null) &&
+    listed.length === 6 && listed.filter((a) => a.id !== 'antigravity').every((a) => a.statusLine === null) &&
     listed.find((a) => a.id === 'antigravity')?.statusLine !== null, show(listed.map((a) => a.statusLine)));
   check('15 las capacidades de claude-code declaran approvesPendingOnCycle false',
     listed.find((a) => a.id === 'claude-code')?.capabilities.permissionCycle?.approvesPendingOnCycle === false);
