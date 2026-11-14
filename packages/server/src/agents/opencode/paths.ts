@@ -31,13 +31,37 @@ export interface OpenCodePaths {
   dbFile: string | null;
   /** `dbFile` + `-wal`. */
   walFile: string | null;
-  /** null si `OPENCODE_MODELS_URL` esta y `OPENCODE_MODELS_PATH` no. */
+  /** null si `OPENCODE_MODELS_URL` esta y `OPENCODE_MODELS_PATH` no, o si el soporte de modelos esta deshabilitado. */
   modelsFile: string | null;
   dataDir: string;
   configDir: string;
   cacheDir: string;
   stateDir: string;
 }
+
+export interface OpenCodeFamilyPathOptions {
+  dirName: string;
+  dbFileName: string;
+  modelsFileName: string;
+  openCodeDbEnv: boolean;
+  openCodeModelsEnv: boolean;
+}
+
+export const OPENCODE_PATH_OPTIONS: OpenCodeFamilyPathOptions = {
+  dirName: 'opencode',
+  dbFileName: 'opencode.db',
+  modelsFileName: 'models.json',
+  openCodeDbEnv: true,
+  openCodeModelsEnv: true,
+};
+
+export const GENCODE_PATH_OPTIONS: OpenCodeFamilyPathOptions = {
+  dirName: 'gencode',
+  dbFileName: 'opencode.db',
+  modelsFileName: 'models.json',
+  openCodeDbEnv: false,
+  openCodeModelsEnv: false,
+};
 
 /**
  * true si la ruta no depende del `cwd` de nadie. En Windows `\\x` es absoluta
@@ -48,7 +72,8 @@ function isFullyQualified(candidate: string, platform: NodeJS.Platform): boolean
   return path.posix.isAbsolute(candidate);
 }
 
-export function resolveOpenCodePaths(
+export function resolveOpenCodeFamilyPaths(
+  options: OpenCodeFamilyPathOptions,
   env: NodeJS.ProcessEnv,
   home: string,
   platform: NodeJS.Platform,
@@ -59,7 +84,7 @@ export function resolveOpenCodePaths(
     return value === undefined || value.length === 0 ? null : value;
   };
   const folder = (name: string, ...fallback: string[]): string =>
-    flavor.join(variable(name) ?? flavor.join(home, ...fallback), 'opencode');
+    flavor.join(variable(name) ?? flavor.join(home, ...fallback), options.dirName);
 
   const dataDir = folder('XDG_DATA_HOME', '.local', 'share');
   const configDir = folder('XDG_CONFIG_HOME', '.config');
@@ -70,18 +95,26 @@ export function resolveOpenCodePaths(
     isFullyQualified(dataDir, platform) ? flavor.join(dataDir, name) : null;
 
   let dbFile: string | null;
-  const configuredDb = variable('OPENCODE_DB');
-  if (configuredDb === null) dbFile = inData('opencode.db');
-  else if (configuredDb === ':memory:') dbFile = null;
-  else if (isFullyQualified(configuredDb, platform)) dbFile = configuredDb;
-  else if (flavor.isAbsolute(configuredDb)) dbFile = null;
-  else dbFile = inData(configuredDb);
+  if (options.openCodeDbEnv) {
+    const configuredDb = variable('OPENCODE_DB');
+    if (configuredDb === null) dbFile = inData(options.dbFileName);
+    else if (configuredDb === ':memory:') dbFile = null;
+    else if (isFullyQualified(configuredDb, platform)) dbFile = configuredDb;
+    else if (flavor.isAbsolute(configuredDb)) dbFile = null;
+    else dbFile = inData(configuredDb);
+  } else {
+    dbFile = inData(options.dbFileName);
+  }
 
   let modelsFile: string | null;
-  const modelsPath = variable('OPENCODE_MODELS_PATH');
-  if (modelsPath !== null) modelsFile = isFullyQualified(modelsPath, platform) ? modelsPath : null;
-  else if (variable('OPENCODE_MODELS_URL') !== null) modelsFile = null;
-  else modelsFile = isFullyQualified(cacheDir, platform) ? flavor.join(cacheDir, 'models.json') : null;
+  if (options.openCodeModelsEnv) {
+    const modelsPath = variable('OPENCODE_MODELS_PATH');
+    if (modelsPath !== null) modelsFile = isFullyQualified(modelsPath, platform) ? modelsPath : null;
+    else if (variable('OPENCODE_MODELS_URL') !== null) modelsFile = null;
+    else modelsFile = isFullyQualified(cacheDir, platform) ? flavor.join(cacheDir, options.modelsFileName) : null;
+  } else {
+    modelsFile = null;
+  }
 
   return {
     dbFile,
@@ -92,4 +125,20 @@ export function resolveOpenCodePaths(
     cacheDir,
     stateDir,
   };
+}
+
+export function resolveOpenCodePaths(
+  env: NodeJS.ProcessEnv,
+  home: string,
+  platform: NodeJS.Platform,
+): OpenCodePaths {
+  return resolveOpenCodeFamilyPaths(OPENCODE_PATH_OPTIONS, env, home, platform);
+}
+
+export function resolveGenCodePaths(
+  env: NodeJS.ProcessEnv,
+  home: string,
+  platform: NodeJS.Platform,
+): OpenCodePaths {
+  return resolveOpenCodeFamilyPaths(GENCODE_PATH_OPTIONS, env, home, platform);
 }
