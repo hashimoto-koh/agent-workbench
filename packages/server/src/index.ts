@@ -272,7 +272,8 @@ function describeStartup(
 }
 
 async function main(): Promise<void> {
-  const token = createSessionToken();
+  // const token = createSessionToken();
+  const token = process.env['AGENT_WORKBENCH_TOKEN'] || createSessionToken();
   const defaultCwd = resolveDefaultCwd();
   // Antes de que nadie lea la configuracion: si quedo en el directorio del
   // nombre viejo, se mueve al nuevo (ver `config-dir-migration.ts`).
