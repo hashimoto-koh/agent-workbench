@@ -18,12 +18,13 @@ import assert from 'node:assert';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   createGenCodeAdapter,
   createOpenCodeAdapter,
   createOpenCodeFamilyAdapter,
   GENCODE_FAMILY_CONFIG,
-  GENCODE_CAPABILITIES_PHASE5,
+  GENCODE_CAPABILITIES,
   GENCODE_INPUT,
 } from '../src/agents/opencode/index.ts';
 import { createOpenCodeFixture, FIXTURE_PROJECT_ID, sessionRow } from './fixtures/opencode-db.mjs';
@@ -51,32 +52,32 @@ try {
     check('1.3 command es gencode', adapter.command === 'gencode');
     check('1.4 installUrl apunta al sitio oficial', adapter.installUrl === 'https://www.genspark.ai');
 
-    check('1.5 capabilities de Fase 5 todas false/null', same(adapter.capabilities, {
-      sessionIdAtLaunch: false,
-      resume: false,
-      statusSource: false,
+    check('1.5 capabilities de Fase 6 con valores medidos', same(adapter.capabilities, {
+      sessionIdAtLaunch: true,
+      resume: true,
+      statusSource: true,
       readySignal: false,
       permissionCycle: null,
       codexPermissions: false,
       models: null,
       efforts: null,
-      questionCards: false,
-      imagesByPath: null,
+      questionCards: true,
+      imagesByPath: 'bare-path-paste',
       fileMentions: null,
       rewind: false,
       contextWindowSource: null,
       plans: false,
-      waitingBlocksSubmit: false,
+      waitingBlocksSubmit: true,
       forceSend: false,
       editQueue: false,
-      scheduledSend: false,
+      scheduledSend: true,
       codexNativeQueue: false,
-      moveToWorktree: false,
+      moveToWorktree: true,
       readOnlyLaunch: null,
     }), show(adapter.capabilities));
 
-    check('1.6 input con imageReference null y quoted-path', same(adapter.input, {
-      imageReference: null,
+    check('1.6 input con imageReference bare-path-paste y quoted-path', same(adapter.input, {
+      imageReference: 'bare-path-paste',
       pieceGapMs: 400,
       pasteMarkers: true,
       enterSeparately: true,
@@ -85,24 +86,29 @@ try {
     }), show(adapter.input));
 
     check('1.7 promptQueue desde session', same(adapter.promptQueue, { source: 'session', forceSend: null }));
-    check('1.8 sessionMove no definida en Fase 5', adapter.sessionMove === undefined);
-    check('1.9 scheduled no definido en Fase 5', adapter.scheduled === undefined);
+    check('1.8 sessionMove definida en Fase 6', adapter.sessionMove !== undefined && typeof adapter.sessionMove.move === 'function');
+    check('1.9 scheduled definida con kind api en Fase 6', adapter.scheduled !== undefined && adapter.scheduled.kind === 'api');
 
     await adapter.dispose();
   }
 
   // ---------------------------------------------------------------------------
-  // 2. Bloqueo estricto de locate() y launch() en Fase 5 (historyOnly: true)
+  // 2. locate() y launch() activos en Fase 6 (historyOnly: false)
   // ---------------------------------------------------------------------------
   {
     const adapter = createGenCodeAdapter({ home: tempDir, platform: 'linux' });
 
     const located = await adapter.locate();
-    check('2.1 locate devuelve null en Fase 5', located === null);
+    check('2.1 locate encuentra gencode en PATH', located !== null && located.resolvedPath.endsWith('gencode'));
 
+    const historyOnlyAdapter = createOpenCodeFamilyAdapter({
+      ...GENCODE_FAMILY_CONFIG,
+      historyOnly: true,
+    }, { home: tempDir, platform: 'linux' });
+    check('2.2 locate con historyOnly devuelve null', (await historyOnlyAdapter.locate()) === null);
     let rejected = false;
     try {
-      await adapter.launch({
+      await historyOnlyAdapter.launch({
         location: { resolvedPath: '/usr/bin/gencode', file: 'gencode', prefixArgs: [], version: '1.19.3' },
         cwd: tempDir,
         resumeSessionId: null,
@@ -112,8 +118,40 @@ try {
     } catch (e) {
       rejected = e instanceof Error && e.message.includes('GenCode launch is disabled in Phase 5');
     }
-    check('2.2 launch rechaza con error explícito de Fase 5', rejected);
+    check('2.3 launch con historyOnly rechaza con error explícito', rejected);
 
+    await historyOnlyAdapter.dispose();
+
+    // 2.4 launch activo con fake serve: arma attach con --username opencode y --session
+    const fakeServePath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'fake-opencode-serve.mjs');
+    const fakeLocation = {
+      resolvedPath: process.execPath,
+      file: process.execPath,
+      prefixArgs: [fakeServePath],
+      version: '1.19.3-gencode.6',
+    };
+    const activeAdapter = createGenCodeAdapter({
+      home: tempDir,
+      platform: 'linux',
+      serveEnv: () => ({ ...process.env, FAKE_SERVE_COMMAND_NAME: 'gencode' }),
+    });
+    const validSessionId = 'ses_12345678901234567890123456';
+    const launchPlan = await activeAdapter.launch({
+      location: fakeLocation,
+      cwd: tempDir,
+      resumeSessionId: validSessionId,
+      proposedSessionId: '00000000-0000-4000-8000-000000000002',
+      launchToken: 'tok2',
+    });
+    check('2.4 launch devuelve args con attach, --session y --username opencode',
+      launchPlan.args.includes('attach') &&
+      launchPlan.args.includes('--session') &&
+      launchPlan.args.includes(validSessionId) &&
+      launchPlan.args.includes('--username') &&
+      launchPlan.args.includes('opencode'),
+      show(launchPlan.args));
+
+    await activeAdapter.dispose();
     await adapter.dispose();
   }
 

@@ -845,13 +845,14 @@ try {
   const status12c = await inspectMemory(c1, home);
   const reach12c = reachOf(status12c);
   check(
-    'los dos: llegan las cinco, en orden, y gencode pendiente de medicion',
+    'los dos: llegan las seis, en orden',
     status12c.reach.map((r) => r.agent).join(',') === 'claude-code,codex,antigravity,opencode,pi,gencode' &&
-      ['claude-code', 'codex', 'antigravity', 'opencode', 'pi'].every((id) => reach12c[id]?.startsWith('si:')) &&
+      Object.values(reach12c).every((value) => value.startsWith('si:')) &&
       reach12c.opencode === 'si:AGENTS.md' &&
       // Pi busca como OpenCode: `AGENTS.md` primero (hito 43).
       reach12c.pi === 'si:AGENTS.md' &&
-      reach12c.gencode === 'no:falta el bloque en AGENTS.md',
+      // GenCode: busca AGENTS.md (medido en la 1.19.5, §16.12).
+      reach12c.gencode === 'si:AGENTS.md',
     JSON.stringify(reach12c),
   );
   await rm(path.join(c12a, '.agents', 'memory', 'MEMORY.md'));

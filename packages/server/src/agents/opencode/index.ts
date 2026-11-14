@@ -180,32 +180,32 @@ export const OPENCODE_INPUT: AgentInput = {
   transcriptReference: 'quoted-path',
 };
 
-export const GENCODE_CAPABILITIES_PHASE5: AgentCapabilities = {
-  sessionIdAtLaunch: false,
-  resume: false,
-  statusSource: false,
+export const GENCODE_CAPABILITIES: AgentCapabilities = {
+  sessionIdAtLaunch: true,
+  resume: true,
+  statusSource: true,
   readySignal: false,
   permissionCycle: null,
   codexPermissions: false,
   models: null,
   efforts: null,
-  questionCards: false,
-  imagesByPath: null,
+  questionCards: true,
+  imagesByPath: 'bare-path-paste',
   fileMentions: null,
   rewind: false,
   contextWindowSource: null,
   plans: false,
-  waitingBlocksSubmit: false,
+  waitingBlocksSubmit: true,
   forceSend: false,
   editQueue: false,
-  scheduledSend: false,
+  scheduledSend: true,
   codexNativeQueue: false,
-  moveToWorktree: false,
+  moveToWorktree: true,
   readOnlyLaunch: null,
 };
 
 export const GENCODE_INPUT: AgentInput = {
-  imageReference: null,
+  imageReference: 'bare-path-paste',
   pieceGapMs: 400,
   pasteMarkers: true,
   enterSeparately: true,
@@ -257,10 +257,10 @@ export const GENCODE_FAMILY_CONFIG: OpenCodeFamilyConfig = {
   serveCwdName: 'gencode-serve',
   serveDefaultUsername: 'opencode',
   listeningCommandName: 'gencode',
-  capabilities: GENCODE_CAPABILITIES_PHASE5,
+  capabilities: GENCODE_CAPABILITIES,
   input: GENCODE_INPUT,
   includeUsername: true,
-  historyOnly: true,
+  historyOnly: false,
 };
 
 export interface OpenCodeAdapterOptions {

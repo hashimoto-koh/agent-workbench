@@ -910,8 +910,8 @@ function computeReach(
     // esta (medido que con los dos carga solo el primero; el respaldo, segun su
     // documentacion, §16.11).
     entry('pi', openCode.reaches, openCode.via),
-    // GenCode: Phase 6 de medición hasta confirmar lectura de AGENTS.md.
-    entry('gencode', false, serverText('memoryViaNoBlock', { file: 'AGENTS.md' })),
+    // GenCode: busca AGENTS.md (medido en la 1.19.5, §16.12).
+    entry('gencode', agentsHasBlock, viaAgents),
   ];
 }
 
