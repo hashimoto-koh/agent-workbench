@@ -30,7 +30,7 @@
 import { existsSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
-import type { AgentCapabilities, AgentId, ServerText } from '@agent-workbench/shared';
+import { serverText, type AgentCapabilities, type AgentId, type ServerText } from '@agent-workbench/shared';
 import type {
   AgentAdapter,
   AgentInput,
@@ -261,6 +261,25 @@ export const GENCODE_FAMILY_CONFIG: OpenCodeFamilyConfig = {
   input: GENCODE_INPUT,
   includeUsername: true,
   historyOnly: false,
+  cleanTerminalEnv: (terminalEnv: Record<string, string>) => {
+    const TARGETS = new Set([
+      'OPENCODE_DB',
+      'OPENCODE_MODELS_PATH',
+      'OPENCODE_MODELS_URL',
+      'OPENCODE_SERVER_PASSWORD',
+      'OPENCODE_SERVER_USERNAME',
+      'OPENCODE_PASSWORD',
+    ]);
+    for (const key of Object.keys(terminalEnv)) {
+      if (TARGETS.has(key.toUpperCase())) {
+        delete terminalEnv[key];
+      }
+    }
+  },
+  missingMessage: () =>
+    serverText('raw', {
+      text: 'GenCode CLI ("gencode") was not found in PATH. Make sure "gencode" is installed and available in PATH (see https://www.genspark.ai).',
+    }),
 };
 
 export interface OpenCodeAdapterOptions {
@@ -311,8 +330,9 @@ export function createOpenCodeFamilyAdapter(
     paths.dbFile === null || paths.walFile === null ? null : { db: paths.dbFile, wal: paths.walFile },
   );
   const catalog = new ModelCatalog(paths.modelsFile);
-  const serveEnv = options.serveEnv ?? (() => {
-    const base = copyEnvironment(process.env);
+  const rawServeEnv = options.serveEnv ?? (() => copyEnvironment(process.env));
+  const serveEnv = (): Record<string, string> => {
+    const base = copyEnvironment(rawServeEnv());
     if (config.id === 'gencode') {
       delete base['OPENCODE_DB'];
       if (!config.pathOptions.openCodeModelsEnv) {
@@ -321,7 +341,7 @@ export function createOpenCodeFamilyAdapter(
       }
     }
     return base;
-  });
+  };
   const schemaDb = new ReadOnlyDatabase(paths.dbFile ?? '', {
     idleCloseMs: OPENCODE_DB_IDLE_CLOSE_MS, required: [], label: config.label, sqlite,
   });
@@ -378,6 +398,7 @@ export function createOpenCodeFamilyAdapter(
       baseEnv: serveEnv,
       listeningCommandName: config.listeningCommandName,
       debugName: `${config.id}-serve`,
+      defaultUsername: config.serveDefaultUsername,
       cwd: config.serveCwdName ? path.join(tmpdir(), 'agent-workbench', config.serveCwdName) : undefined,
     });
     /*

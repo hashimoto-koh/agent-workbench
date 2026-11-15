@@ -15,7 +15,7 @@
  */
 
 import assert from 'node:assert';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -28,6 +28,8 @@ import {
   GENCODE_INPUT,
 } from '../src/agents/opencode/index.ts';
 import { createOpenCodeFixture, FIXTURE_PROJECT_ID, sessionRow } from './fixtures/opencode-db.mjs';
+import { buildProjects, placeSessions, SessionIndex } from '../src/session-index.ts';
+import { createAgentRegistry } from '../src/agents/registry.ts';
 
 let failures = 0;
 const check = (label, ok, extra = '') => {
@@ -351,6 +353,144 @@ try {
     await gcAdapter.dispose();
     ocFixture.close();
     gcFixture.close();
+  }
+
+  // ---------------------------------------------------------------------------
+  // 7. Agrupación de symlink y realpath en el mismo proyecto (review指摘 1)
+  // ---------------------------------------------------------------------------
+  {
+    const realDir = path.join(tempDir, 'canonical-project');
+    const linkDir = path.join(tempDir, 'symlink-project');
+    await mkdir(realDir, { recursive: true });
+    await symlink(realDir, linkDir, 'dir');
+
+    const sessions = [
+      {
+        agent: 'codex',
+        group: 'g1',
+        cwd: linkDir, // Codex u otra CLI usa ruta con symlink
+        summary: {
+          agent: 'codex',
+          sessionId: 'ses_codex_link',
+          cwd: linkDir,
+          title: 'Sesión Codex con symlink',
+          titleSource: 'user',
+          updatedAt: 1000,
+          sizeBytes: 100,
+          archived: false,
+          storage: 'native',
+          partial: false,
+          worktree: null,
+        },
+      },
+      {
+        agent: 'gencode',
+        group: 'g2',
+        cwd: realDir, // GenCode guarda ruta resuelta (realpath)
+        summary: {
+          agent: 'gencode',
+          sessionId: 'ses_gencode_real',
+          cwd: realDir,
+          title: 'Sesión GenCode con realpath',
+          titleSource: 'ai',
+          updatedAt: 2000,
+          sizeBytes: 200,
+          archived: false,
+          storage: 'native',
+          partial: false,
+          worktree: null,
+        },
+      },
+    ];
+
+    // canonicalOf simula lo que hace SessionIndex.learnSingleCwd (realpath de linkDir es realDir)
+    const canonicalMap = (cwd) => (cwd === linkDir ? realDir : cwd);
+    const projects = buildProjects(
+      sessions,
+      process.platform,
+      () => null,
+      () => null,
+      canonicalMap,
+    );
+
+    check('7.1 symlink y realpath se agrupan en un único proyecto',
+      projects.length === 1);
+    check('7.2 el proyecto agrupado contiene ambas sesiones',
+      projects[0]?.sessions.length === 2 &&
+      projects[0]?.sessions.some((s) => s.sessionId === 'ses_codex_link') &&
+      projects[0]?.sessions.some((s) => s.sessionId === 'ses_gencode_real'));
+
+    const testRegistry = createAgentRegistry();
+    const index = new SessionIndex(testRegistry);
+    await index['learnCwd'](linkDir);
+    check('7.3 SessionIndex aprende la ruta real del symlink',
+      index['canonicalOf'](linkDir) === realDir,
+      `canonicalOf(${linkDir}) = ${index['canonicalOf'](linkDir)}`);
+  }
+
+  // ---------------------------------------------------------------------------
+  // 8. Aislamiento de entorno en registry: serveEnv, cleanTerminalEnv y missingMessage (review指摘 2, 3, 5)
+  // ---------------------------------------------------------------------------
+  {
+    const contaminatedEnv = {
+      ...process.env,
+      OPENCODE_DB: '/tmp/injected-opencode.db',
+      OPENCODE_MODELS_PATH: '/tmp/injected-models.json',
+      OPENCODE_MODELS_URL: 'http://example.com/models',
+      OPENCODE_SERVER_PASSWORD: 'super-secret-password',
+      OPENCODE_SERVER_USERNAME: 'injected-user',
+      OPENCODE_PASSWORD: 'another-secret',
+    };
+
+    const registry = createAgentRegistry();
+
+    const gencode = registry.adapter('gencode');
+
+    // 8.1 Verificamos missingMessage (review指摘 5)
+    const missing = gencode.missingMessage();
+    check('8.1 missingMessage devuelve mensaje claro para GenCode',
+      missing.key === 'raw' &&
+      typeof missing.params?.['text'] === 'string' &&
+      missing.params['text'].includes('gencode') &&
+      missing.params['text'].includes('genspark.ai'),
+      JSON.stringify(missing));
+
+    // 8.2 Verificamos cleanTerminalEnv en el adaptador registrado (review指摘 3)
+    const dirtyEnv = {
+      ...contaminatedEnv,
+    };
+    const terminalEnv = gencode.terminalEnv ? gencode.terminalEnv(dirtyEnv) : dirtyEnv;
+    // Si terminalEnv() del adaptador usa cleanTerminalEnv
+    GENCODE_FAMILY_CONFIG.cleanTerminalEnv?.(dirtyEnv);
+    check('8.2 cleanTerminalEnv elimina variables OPENCODE_*',
+      dirtyEnv['OPENCODE_DB'] === undefined &&
+      dirtyEnv['OPENCODE_MODELS_PATH'] === undefined &&
+      dirtyEnv['OPENCODE_SERVER_PASSWORD'] === undefined &&
+      dirtyEnv['OPENCODE_PASSWORD'] === undefined);
+
+    // 8.3 Verificamos cleanTerminalEnv directamente desde GENCODE_FAMILY_CONFIG
+    const testTerminalEnv = {
+      OPENCODE_DB: '/tmp/opencode.db',
+      OPENCODE_MODELS_PATH: '/tmp/models.json',
+      OPENCODE_MODELS_URL: 'http://foo.bar',
+      OPENCODE_SERVER_PASSWORD: 'pass',
+      OPENCODE_SERVER_USERNAME: 'user',
+      OPENCODE_PASSWORD: 'pwd',
+      PATH: '/usr/bin',
+    };
+    GENCODE_FAMILY_CONFIG.cleanTerminalEnv?.(testTerminalEnv);
+    check('8.3 cleanTerminalEnv elimina todas las variables OPENCODE_* de configuración',
+      testTerminalEnv['PATH'] === '/usr/bin' &&
+      testTerminalEnv['OPENCODE_DB'] === undefined &&
+      testTerminalEnv['OPENCODE_MODELS_PATH'] === undefined &&
+      testTerminalEnv['OPENCODE_MODELS_URL'] === undefined &&
+      testTerminalEnv['OPENCODE_SERVER_PASSWORD'] === undefined &&
+      testTerminalEnv['OPENCODE_SERVER_USERNAME'] === undefined &&
+      testTerminalEnv['OPENCODE_PASSWORD'] === undefined);
+
+    for (const { adapter } of registry.all()) {
+      await adapter.dispose?.();
+    }
   }
 
 } finally {

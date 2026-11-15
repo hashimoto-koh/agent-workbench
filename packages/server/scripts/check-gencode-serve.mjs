@@ -215,6 +215,19 @@ const fakeLocation = {
 
   await procFail.dispose();
 
+  // Redaction de username y password (review指摘 4)
+  const procRedact = new OpenCodeServeProcess({
+    location: fakeLocation,
+    baseEnv: () => ({}),
+    listeningCommandName: 'gencode',
+    defaultUsername: 'test-user-name',
+  });
+  procRedact['password'] = 'test-secret-pass';
+  const redacted = procRedact['redact']('auth failure for user test-user-name with pass test-secret-pass');
+  check('4 redact oculta tanto password como defaultUsername',
+    redacted === 'auth failure for user *** with pass ***',
+    redacted);
+
   // Test wide mode: rechaza 0.0.0.0
   const procWide = new OpenCodeServeProcess({
     location: fakeLocation,

@@ -25,7 +25,7 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   AGENT_IDS,
@@ -384,10 +384,11 @@ export function buildProjects(
   platform: string,
   linkOf: (cwd: string) => WorktreeLink | null = () => null,
   relocateOf: (cwd: string) => Relocation | null = () => null,
+  canonicalOf: (cwd: string) => string = (cwd) => cwd,
 ): Array<Omit<ProjectSummary, 'cwdExists' | 'isGitRepo'>> {
   const projects = new Map<string, Omit<ProjectSummary, 'cwdExists' | 'isGitRepo'>>();
   const moved = new Map<string, Map<string, ProjectRelocation>>();
-  for (const placement of placeSessions(sessions, platform, linkOf, relocateOf)) {
+  for (const placement of placeSessions(sessions, platform, linkOf, relocateOf, canonicalOf)) {
     const { input: session, link, relocation, effective, key } = placement;
     // La que no se aplica (en pausa) deja la sesion donde estaba.
     const applied = relocation !== null && !relocation.paused;
@@ -481,6 +482,7 @@ export function placeSessions(
   platform: string,
   linkOf: (cwd: string) => WorktreeLink | null = () => null,
   relocateOf: (cwd: string) => Relocation | null = () => null,
+  canonicalOf: (cwd: string) => string = (cwd) => cwd,
 ): SessionPlacement[] {
   const all = [...sessions];
 
@@ -499,9 +501,10 @@ export function placeSessions(
     const base = link?.mainCwd ?? sessionCwd;
     const relocation = base.length > 0 ? relocateOf(base) : null;
     const effective = relocation !== null && !relocation.paused ? relocation.cwd : base;
+    const canonical = effective.length > 0 ? canonicalOf(effective) : '';
     const key =
-      effective.length > 0
-        ? normalizeCwdKey(effective, platform)
+      canonical.length > 0
+        ? normalizeCwdKey(canonical, platform)
         : `unknown:${input.agent}:${input.group}`;
     return { input, link, base, relocation, effective, key };
   });
@@ -541,6 +544,13 @@ export class SessionIndex extends EventEmitter {
    * `sessions`: si no, un proyecto que existe se veria tachado un instante.
    */
   private readonly cwdExists = new Map<string, boolean>();
+
+  /**
+   * Ruta canonica (realpath) de cada `cwd` en disco. Permite agrupar bajo la misma
+   * clave de proyecto sesiones de CLIs que guardan la ruta canonica y CLIs que
+   * guardan una ruta con enlaces simbolicos (symlinks).
+   */
+  private readonly cwdReal = new Map<string, string>();
 
   /**
    * Hito 48. La rama aparte de cada `cwd` (null si no es una), y si cada carpeta
@@ -682,12 +692,17 @@ export class SessionIndex extends EventEmitter {
     return [...this.placedSessions(), ...this.vaultCopies()];
   }
 
+  private canonicalOf(cwd: string): string {
+    return this.cwdReal.get(cwd) ?? cwd;
+  }
+
   private projectsWith(copies: readonly ProjectInput[]): ProjectSummary[] {
     return buildProjects(
       [...this.placedSessions(), ...copies],
       process.platform,
       (cwd) => this.linkOf(cwd),
       (cwd) => this.relocateOf(cwd),
+      (cwd) => this.canonicalOf(cwd),
     )
       .map((project) => this.finish(project))
       .sort((a, b) => b.lastActivityAt - a.lastActivityAt);
@@ -705,6 +720,7 @@ export class SessionIndex extends EventEmitter {
       process.platform,
       (cwd) => this.linkOf(cwd),
       (cwd) => this.relocateOf(cwd),
+      (cwd) => this.canonicalOf(cwd),
     ).map((placement) => ({
       agent: placement.input.agent,
       sessionId: placement.input.summary.sessionId,
@@ -753,19 +769,40 @@ export class SessionIndex extends EventEmitter {
   }
 
   /**
+   * Aprende si existe una carpeta en disco y su ruta canonica (realpath).
+   */
+  private async learnSingleCwd(folder: string, fresh = false): Promise<boolean> {
+    if (fresh || !this.cwdExists.has(folder)) {
+      const exists = await pathExists(folder);
+      this.cwdExists.set(folder, exists);
+      if (exists) {
+        try {
+          const resolved = await realpath(folder);
+          this.cwdReal.set(folder, resolved);
+        } catch {
+          this.cwdReal.set(folder, folder);
+        }
+      } else {
+        this.cwdReal.set(folder, folder);
+      }
+    }
+    return this.cwdExists.get(folder) === true;
+  }
+
+  /**
    * Lo que la barra necesita saber de una carpeta, antes de que su sesion sea
    * visible: si existe y, con ramas aparte, de que proyecto es y si ese
    * proyecto es de git. `fresh` vuelve a mirar si existe: la carpeta pudo
    * aparecer o borrarse desde el escaneo.
    */
   private async learnCwd(cwd: string, fresh = false): Promise<void> {
-    if (fresh || !this.cwdExists.has(cwd)) this.cwdExists.set(cwd, await pathExists(cwd));
+    await this.learnSingleCwd(cwd, fresh);
     let projectCwd = cwd;
     if (this.links !== undefined) {
       if (fresh || !this.cwdLink.has(cwd)) this.cwdLink.set(cwd, await this.links.sessionLink(cwd).catch(() => null));
       projectCwd = this.cwdLink.get(cwd)?.mainCwd ?? cwd;
-      if (projectCwd !== cwd && (fresh || !this.cwdExists.has(projectCwd))) {
-        this.cwdExists.set(projectCwd, await pathExists(projectCwd));
+      if (projectCwd !== cwd) {
+        await this.learnSingleCwd(projectCwd, fresh);
       }
       if (fresh || !this.cwdGit.has(projectCwd)) {
         this.cwdGit.set(projectCwd, await this.links.isGitRepo(projectCwd).catch(() => false));
@@ -789,11 +826,10 @@ export class SessionIndex extends EventEmitter {
       return;
     }
     const { from, to } = resolved.location;
-    if (fresh || !this.cwdExists.has(from)) this.cwdExists.set(from, await pathExists(from));
-    const paused = this.cwdExists.get(from) === true;
+    const paused = await this.learnSingleCwd(from, fresh);
     this.cwdRelocation.set(base, { cwd: paused ? base : resolved.cwd, from, to, paused });
     if (paused) return;
-    if (fresh || !this.cwdExists.has(resolved.cwd)) this.cwdExists.set(resolved.cwd, await pathExists(resolved.cwd));
+    await this.learnSingleCwd(resolved.cwd, fresh);
     if (this.links !== undefined && (fresh || !this.cwdGit.has(resolved.cwd))) {
       this.cwdGit.set(resolved.cwd, await this.links.isGitRepo(resolved.cwd).catch(() => false));
     }
@@ -1017,6 +1053,7 @@ export class SessionIndex extends EventEmitter {
         */
         this.sessions.clear();
         this.cwdExists.clear();
+        this.cwdReal.clear();
         this.cwdLink.clear();
         this.cwdGit.clear();
         this.cwdRelocation.clear();
@@ -1030,6 +1067,7 @@ export class SessionIndex extends EventEmitter {
       // Las dos juntas: una sesion sin su `cwdExists` se veria tachada.
       this.sessions.clear();
       this.cwdExists.clear();
+      this.cwdReal.clear();
       this.cwdLink.clear();
       this.cwdGit.clear();
       this.cwdRelocation.clear();
@@ -1084,6 +1122,7 @@ export class SessionIndex extends EventEmitter {
             process.platform,
             (cwd) => this.linkOf(cwd),
             (cwd) => this.relocateOf(cwd),
+            (cwd) => this.canonicalOf(cwd),
           ).filter((project) => project.sessions.some((summary) => freshPairs.has(`${summary.agent}:${summary.sessionId}`)));
           this.emit(
             'projects',

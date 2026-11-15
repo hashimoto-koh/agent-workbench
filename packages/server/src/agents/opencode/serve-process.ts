@@ -110,6 +110,8 @@ export interface ServeProcessOptions {
   listeningCommandName?: string;
   /** Nombre para los logs de depuración (por defecto 'opencode-serve'). */
   debugName?: string;
+  /** Usuario por defecto para Basic Auth, para ocultarlo en los errores. */
+  defaultUsername?: string;
 }
 
 /**
@@ -418,7 +420,11 @@ export class OpenCodeServeProcess {
   }
 
   private redact(text: string): string {
-    return text.split(this.password).join('***');
+    let result = text.split(this.password).join('***');
+    if (this.options.defaultUsername !== undefined && this.options.defaultUsername.length > 0) {
+      result = result.split(this.options.defaultUsername).join('***');
+    }
+    return result;
   }
 
   private scheduleIdleStop(): void {
