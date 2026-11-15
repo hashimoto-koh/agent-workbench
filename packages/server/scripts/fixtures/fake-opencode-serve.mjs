@@ -35,7 +35,7 @@ const password = process.env.OPENCODE_SERVER_PASSWORD ?? '';
 const username = process.env.OPENCODE_SERVER_USERNAME || 'opencode';
 
 if (mode === 'early-exit') {
-  process.stderr.write(`Error: no se pudo abrir la base (password=${password})\n`);
+  process.stderr.write(`Error: no se pudo abrir la base para ${username} en /home/jov/.local/share/gencode/opencode.db (password=${password})\n`);
   process.exit(3);
 }
 

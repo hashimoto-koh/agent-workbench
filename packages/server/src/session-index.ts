@@ -419,7 +419,7 @@ export function buildProjects(
         locations = new Map();
         moved.set(key, locations);
       }
-      const fromKey = normalizeCwdKey(relocation.from, platform);
+      const fromKey = normalizeCwdKey(canonicalOf(relocation.from), platform);
       const known = locations.get(fromKey);
       if (known === undefined) {
         locations.set(fromKey, { from: relocation.from, to: relocation.to, sessions: 1, paused: relocation.paused });
@@ -553,6 +553,11 @@ export class SessionIndex extends EventEmitter {
   private readonly cwdReal = new Map<string, string>();
 
   /**
+   * Mapeo inverso de realpath a rutas con symlinks que apuntan a él.
+   */
+  private readonly realToCwds = new Map<string, Set<string>>();
+
+  /**
    * Hito 48. La rama aparte de cada `cwd` (null si no es una), y si cada carpeta
    * de proyecto es de git. Se aprenden junto con `cwdExists` y por lo mismo: la
    * barra se arma sin tocar el disco.
@@ -668,6 +673,25 @@ export class SessionIndex extends EventEmitter {
     return [...this.sessions.values()].map((session) => this.placed(session));
   }
 
+  private resolveLocation(base: string) {
+    if (this.locations === undefined) return null;
+    const direct = this.locations.resolve(base);
+    if (direct !== null) return direct;
+    const canonical = this.canonicalOf(base);
+    if (canonical !== base) {
+      const resolved = this.locations.resolve(canonical);
+      if (resolved !== null) return resolved;
+    }
+    const aliases = this.realToCwds.get(canonical);
+    if (aliases !== undefined) {
+      for (const alias of aliases) {
+        const resolved = this.locations.resolve(alias);
+        if (resolved !== null) return resolved;
+      }
+    }
+    return null;
+  }
+
   /**
    * Hito 56. A donde se movio una carpeta del historial, ya aprendida, o null si
    * no se movio o la ubicacion esta en pausa. Lo usa quien necesita la carpeta de
@@ -676,15 +700,23 @@ export class SessionIndex extends EventEmitter {
    */
   relocationOf(cwd: string): Relocation | null {
     const learned = this.cwdRelocation.get(cwd);
-    if (learned !== undefined) return learned !== null && !learned.paused ? learned : null;
-    const resolved = this.locations?.resolve(cwd) ?? null;
+    if (learned !== undefined && learned !== null) return !learned.paused ? learned : null;
+    const resolved = this.resolveLocation(cwd);
     // Sin saber si la carpeta anterior existe, no se aplica: mejor no mover que esconder una carpeta que existe.
     if (resolved === null || this.cwdExists.get(resolved.location.from) !== false) return null;
     return { cwd: resolved.cwd, from: resolved.location.from, to: resolved.location.to, paused: false };
   }
 
   private relocateOf(cwd: string): Relocation | null {
-    return this.cwdRelocation.get(cwd) ?? null;
+    const learned = this.cwdRelocation.get(cwd);
+    if (learned !== undefined && learned !== null) return learned;
+    const resolved = this.resolveLocation(cwd);
+    if (resolved === null) return null;
+    const { from, to } = resolved.location;
+    const paused = this.cwdExists.get(from) === true;
+    const rel: Relocation = { cwd: paused ? cwd : resolved.cwd, from, to, paused };
+    this.cwdRelocation.set(cwd, rel);
+    return rel;
   }
 
   /** Todas las sesiones de la barra, nativas y copias, tal como `getProjects` las ubica. */
@@ -775,14 +807,44 @@ export class SessionIndex extends EventEmitter {
     if (fresh || !this.cwdExists.has(folder)) {
       const exists = await pathExists(folder);
       this.cwdExists.set(folder, exists);
+      const oldResolved = this.cwdReal.get(folder);
       if (exists) {
         try {
           const resolved = await realpath(folder);
           this.cwdReal.set(folder, resolved);
+          if (oldResolved !== undefined && oldResolved !== resolved) {
+            this.realToCwds.get(oldResolved)?.delete(folder);
+            if (this.realToCwds.get(oldResolved)?.size === 0) {
+              this.realToCwds.delete(oldResolved);
+            }
+          }
+          if (resolved !== folder) {
+            let aliases = this.realToCwds.get(resolved);
+            if (aliases === undefined) {
+              aliases = new Set();
+              this.realToCwds.set(resolved, aliases);
+            }
+            const hadAlias = aliases.has(folder);
+            aliases.add(folder);
+            if (!hadAlias) {
+              if (this.cwdRelocation.get(resolved) === null) {
+                this.cwdRelocation.delete(resolved);
+                if (this.cwdExists.has(resolved)) {
+                  await this.learnRelocation(resolved, fresh);
+                }
+              }
+            }
+          }
         } catch {
           this.cwdReal.set(folder, folder);
         }
       } else {
+        if (oldResolved !== undefined && oldResolved !== folder) {
+          this.realToCwds.get(oldResolved)?.delete(folder);
+          if (this.realToCwds.get(oldResolved)?.size === 0) {
+            this.realToCwds.delete(oldResolved);
+          }
+        }
         this.cwdReal.set(folder, folder);
       }
     }
@@ -820,7 +882,7 @@ export class SessionIndex extends EventEmitter {
    */
   private async learnRelocation(base: string, fresh: boolean): Promise<void> {
     if (this.locations === undefined) return;
-    const resolved = this.locations.resolve(base);
+    const resolved = this.resolveLocation(base);
     if (resolved === null) {
       this.cwdRelocation.set(base, null);
       return;
@@ -1054,6 +1116,7 @@ export class SessionIndex extends EventEmitter {
         this.sessions.clear();
         this.cwdExists.clear();
         this.cwdReal.clear();
+        this.realToCwds.clear();
         this.cwdLink.clear();
         this.cwdGit.clear();
         this.cwdRelocation.clear();
@@ -1068,6 +1131,7 @@ export class SessionIndex extends EventEmitter {
       this.sessions.clear();
       this.cwdExists.clear();
       this.cwdReal.clear();
+      this.realToCwds.clear();
       this.cwdLink.clear();
       this.cwdGit.clear();
       this.cwdRelocation.clear();

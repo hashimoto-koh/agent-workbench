@@ -28,6 +28,11 @@ import {
   ServeStartError,
 } from '../src/agents/opencode/serve-process.ts';
 import { attachArgs, launchWithServe } from '../src/agents/opencode/serve-launch.ts';
+import {
+  createGenCodeAdapter,
+  GENCODE_FAMILY_CONFIG,
+  OPENCODE_FAMILY_CONFIG,
+} from '../src/agents/opencode/index.ts';
 
 let failures = 0;
 const check = (label, ok, extra = '') => {
@@ -215,18 +220,83 @@ const fakeLocation = {
 
   await procFail.dispose();
 
-  // Redaction de username y password (review指摘 4)
-  const procRedact = new OpenCodeServeProcess({
+  // Redaction: por defecto redactUsername es false, preserva el nombre de usuario
+  const procRedactDefault = new OpenCodeServeProcess({
     location: fakeLocation,
     baseEnv: () => ({}),
     listeningCommandName: 'gencode',
     defaultUsername: 'test-user-name',
   });
-  procRedact['password'] = 'test-secret-pass';
-  const redacted = procRedact['redact']('auth failure for user test-user-name with pass test-secret-pass');
-  check('4 redact oculta tanto password como defaultUsername',
-    redacted === 'auth failure for user *** with pass ***',
-    redacted);
+  procRedactDefault['password'] = 'test-secret-pass';
+  const redactedDefault = procRedactDefault['redact']('auth failure for user test-user-name with pass test-secret-pass');
+  check('4 redact por defecto solo oculta password y preserva username',
+    redactedDefault === 'auth failure for user test-user-name with pass ***',
+    redactedDefault);
+
+  // Redaction con redactUsername: true oculta tanto password como username cuando es personalizado
+  const procRedactUser = new OpenCodeServeProcess({
+    location: fakeLocation,
+    baseEnv: () => ({ OPENCODE_SERVER_USERNAME: 'alice' }),
+    listeningCommandName: 'gencode',
+    defaultUsername: 'opencode',
+    redactUsername: true,
+  });
+  procRedactUser['password'] = 'test-secret-pass';
+  const redactedUser = procRedactUser['redact']('auth failure for user alice in /home/jov/.local/share/gencode/opencode.db with pass test-secret-pass');
+  check('4 redact con redactUsername: true y OPENCODE_SERVER_USERNAME oculta username y password pero preserva opencode.db',
+    redactedUser === 'auth failure for user *** in /home/jov/.local/share/gencode/opencode.db with pass ***',
+    redactedUser);
+
+  // Redaction con redactUsername: true y usuario opencode preserva opencode para no destruir rutas
+  const procRedactDefaultUser = new OpenCodeServeProcess({
+    location: fakeLocation,
+    baseEnv: () => ({}),
+    listeningCommandName: 'gencode',
+    defaultUsername: 'opencode',
+    redactUsername: true,
+  });
+  procRedactDefaultUser['password'] = 'test-secret-pass';
+  const redactedDefaultUser = procRedactDefaultUser['redact']('auth failure for user opencode in /home/jov/.local/share/gencode/opencode.db with pass test-secret-pass');
+  check('4 redact con usuario opencode preserva la palabra opencode intacta',
+    redactedDefaultUser === 'auth failure for user opencode in /home/jov/.local/share/gencode/opencode.db with pass ***',
+    redactedDefaultUser);
+
+  // Verificamos que GENCODE_FAMILY_CONFIG declara redactUsername: true y OPENCODE no
+  check('4 GENCODE_FAMILY_CONFIG declara redactUsername: true',
+    GENCODE_FAMILY_CONFIG.redactUsername === true);
+  check('4 OPENCODE_FAMILY_CONFIG no declara redactUsername (false)',
+    OPENCODE_FAMILY_CONFIG.redactUsername !== true);
+
+  // Verificamos que el adaptador GenCode aplica redaction al fallar el serve (con custom username)
+  const earlyAdapter = createGenCodeAdapter({
+    home: defaultGenCodeServeCwd(),
+    platform: 'linux',
+    serveEnv: () => ({
+      FAKE_SERVE_COMMAND_NAME: 'gencode',
+      FAKE_OPENCODE_SERVE_MODE: 'early-exit',
+      OPENCODE_SERVER_USERNAME: 'alice',
+    }),
+  });
+  let gcEarlyErr = null;
+  try {
+    await earlyAdapter.launch({
+      location: fakeLocation,
+      cwd: '.',
+      resumeSessionId: 'ses_12345678901234567890123456',
+      proposedSessionId: '00000000-0000-4000-8000-000000000009',
+      launchToken: 'tok-early',
+    });
+  } catch (err) {
+    gcEarlyErr = err?.message ?? String(err);
+  }
+  check('4 GenCode adaptador launch con error oculta password y custom username por redaction',
+    gcEarlyErr !== null &&
+    gcEarlyErr.includes('password=***') &&
+    !gcEarlyErr.includes('alice') &&
+    gcEarlyErr.includes('para ***') &&
+    gcEarlyErr.includes('/home/jov/.local/share/gencode/opencode.db'),
+    gcEarlyErr);
+  await earlyAdapter.dispose();
 
   // Test wide mode: rechaza 0.0.0.0
   const procWide = new OpenCodeServeProcess({

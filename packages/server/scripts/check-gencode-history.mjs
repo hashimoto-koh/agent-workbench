@@ -426,6 +426,107 @@ try {
     check('7.3 SessionIndex aprende la ruta real del symlink',
       index['canonicalOf'](linkDir) === realDir,
       `canonicalOf(${linkDir}) = ${index['canonicalOf'](linkDir)}`);
+
+    // 7.4 relocation con symlink y realpath unifica fromKey canónico en una sola entrada (review指摘 2)
+    const relFromLink = path.join(tempDir, 'relocation-link');
+    const relFromReal = path.join(tempDir, 'relocation-real');
+    await mkdir(relFromReal, { recursive: true });
+    await symlink(relFromReal, relFromLink, 'dir');
+    const relTo = path.join(tempDir, 'relocation-target');
+    await mkdir(relTo, { recursive: true });
+
+    const relocatedSessions = [
+      {
+        agent: 'gencode',
+        group: 'g3',
+        cwd: relFromReal,
+        summary: {
+          agent: 'gencode',
+          sessionId: 'ses_gc_rel_1',
+          cwd: relFromReal,
+          title: 'Relocated session 1 (real)',
+          titleSource: 'ai',
+          updatedAt: 3000,
+          sizeBytes: 100,
+          archived: false,
+          storage: 'native',
+          partial: false,
+          worktree: null,
+        },
+      },
+      {
+        agent: 'codex',
+        group: 'g4',
+        cwd: relFromLink,
+        summary: {
+          agent: 'codex',
+          sessionId: 'ses_cdx_rel_2',
+          cwd: relFromLink,
+          title: 'Relocated session 2 (symlink)',
+          titleSource: 'user',
+          updatedAt: 3100,
+          sizeBytes: 120,
+          archived: false,
+          storage: 'native',
+          partial: false,
+          worktree: null,
+        },
+      },
+    ];
+
+    const relProjects = buildProjects(
+      relocatedSessions,
+      process.platform,
+      () => null,
+      (cwd) => {
+        if (cwd === relFromReal) return { from: relFromReal, to: relTo, cwd: relTo, paused: false };
+        if (cwd === relFromLink) return { from: relFromLink, to: relTo, cwd: relTo, paused: false };
+        return null;
+      },
+      (cwd) => (cwd === relFromLink ? relFromReal : cwd),
+    );
+    check('7.4 relocation con symlink y realpath unifica fromKey canónico en una sola entrada con 2 sesiones',
+      relProjects.length === 1 &&
+      relProjects[0]?.sessions.length === 2 &&
+      relProjects[0]?.relocations?.length === 1 &&
+      relProjects[0]?.relocations?.[0]?.sessions === 2,
+      show(relProjects[0]?.relocations));
+
+    // 7.5 SessionIndex resuelve relocation registrada con symlink para carpetas en realpath (review指摘 3)
+    const fakeStore = {
+      resolve: (cwd) => {
+        if (cwd === relFromLink) return { cwd: relTo, location: { from: relFromLink, to: relTo, createdAt: 1000 } };
+        return null;
+      },
+    };
+    const indexWithLocations = new SessionIndex(testRegistry, undefined, undefined, undefined, fakeStore);
+    await indexWithLocations['learnCwd'](relFromLink);
+    await indexWithLocations['learnCwd'](relFromReal);
+    const resolvedForReal = indexWithLocations['resolveLocation'](relFromReal);
+    const relocateForReal = indexWithLocations['relocateOf'](relFromReal);
+    check('7.5 SessionIndex resuelve relocation para realpath aunque esté registrada con symlink',
+      resolvedForReal !== null && resolvedForReal.cwd === relTo &&
+      relocateForReal !== null && relocateForReal.from === relFromLink && relocateForReal.to === relTo,
+      show({ resolvedForReal, relocateForReal }));
+
+    // 7.5b SessionIndex resuelve relocation con orden inverso (real -> link): el cache nulo se invalida y relocateOf funciona
+    const indexReverse = new SessionIndex(testRegistry, undefined, undefined, undefined, fakeStore);
+    await indexReverse['learnCwd'](relFromReal);
+    check('7.5b learnCwd(real) solo sin alias no resuelve relocation aún',
+      indexReverse['relocateOf'](relFromReal) === null);
+    await indexReverse['learnCwd'](relFromLink);
+    const resolvedReverse = indexReverse['resolveLocation'](relFromReal);
+    const relocateReverse = indexReverse['relocateOf'](relFromReal);
+    check('7.5b SessionIndex resuelve relocation para realpath cuando se aprendió realpath primero (real -> link)',
+      resolvedReverse !== null && resolvedReverse.cwd === relTo &&
+      relocateReverse !== null && relocateReverse.from === relFromLink && relocateReverse.to === relTo,
+      show({ resolvedReverse, relocateReverse }));
+    indexReverse.dispose();
+
+    for (const { adapter } of testRegistry.all()) {
+      await adapter.dispose?.();
+    }
+    indexWithLocations.dispose();
   }
 
   // ---------------------------------------------------------------------------
@@ -448,27 +549,13 @@ try {
 
     // 8.1 Verificamos missingMessage (review指摘 5)
     const missing = gencode.missingMessage();
+    const expectedMissingText = 'GenCode CLI ("gencode") was not found in PATH. Please install "gencode" and ensure it is available in your PATH (official site: https://www.genspark.ai).';
     check('8.1 missingMessage devuelve mensaje claro para GenCode',
       missing.key === 'raw' &&
-      typeof missing.params?.['text'] === 'string' &&
-      missing.params['text'].includes('gencode') &&
-      missing.params['text'].includes('genspark.ai'),
+      missing.params?.['text'] === expectedMissingText,
       JSON.stringify(missing));
 
-    // 8.2 Verificamos cleanTerminalEnv en el adaptador registrado (review指摘 3)
-    const dirtyEnv = {
-      ...contaminatedEnv,
-    };
-    const terminalEnv = gencode.terminalEnv ? gencode.terminalEnv(dirtyEnv) : dirtyEnv;
-    // Si terminalEnv() del adaptador usa cleanTerminalEnv
-    GENCODE_FAMILY_CONFIG.cleanTerminalEnv?.(dirtyEnv);
-    check('8.2 cleanTerminalEnv elimina variables OPENCODE_*',
-      dirtyEnv['OPENCODE_DB'] === undefined &&
-      dirtyEnv['OPENCODE_MODELS_PATH'] === undefined &&
-      dirtyEnv['OPENCODE_SERVER_PASSWORD'] === undefined &&
-      dirtyEnv['OPENCODE_PASSWORD'] === undefined);
-
-    // 8.3 Verificamos cleanTerminalEnv directamente desde GENCODE_FAMILY_CONFIG
+    // 8.2 Verificamos cleanTerminalEnv directamente desde GENCODE_FAMILY_CONFIG
     const testTerminalEnv = {
       OPENCODE_DB: '/tmp/opencode.db',
       OPENCODE_MODELS_PATH: '/tmp/models.json',
@@ -479,7 +566,7 @@ try {
       PATH: '/usr/bin',
     };
     GENCODE_FAMILY_CONFIG.cleanTerminalEnv?.(testTerminalEnv);
-    check('8.3 cleanTerminalEnv elimina todas las variables OPENCODE_* de configuración',
+    check('8.2 cleanTerminalEnv elimina todas las variables OPENCODE_* de configuración',
       testTerminalEnv['PATH'] === '/usr/bin' &&
       testTerminalEnv['OPENCODE_DB'] === undefined &&
       testTerminalEnv['OPENCODE_MODELS_PATH'] === undefined &&
@@ -487,6 +574,86 @@ try {
       testTerminalEnv['OPENCODE_SERVER_PASSWORD'] === undefined &&
       testTerminalEnv['OPENCODE_SERVER_USERNAME'] === undefined &&
       testTerminalEnv['OPENCODE_PASSWORD'] === undefined);
+
+    // 8.4 - 8.7 Verificamos que serveEnv de GenCode elimina OPENCODE_DB a través de registry (review指摘 2)
+    const fakeServePath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'fake-opencode-serve.mjs');
+    const fakeLoc = {
+      resolvedPath: process.execPath,
+      file: process.execPath,
+      prefixArgs: [fakeServePath],
+      version: '1.19.3-gencode.6',
+    };
+
+    const origEnv = process.env;
+    try {
+      process.env = {
+        ...origEnv,
+        OPENCODE_DB: '/tmp/leak-opencode.db',
+        OPENCODE_MODELS_PATH: '/tmp/leak-models.json',
+        OPENCODE_MODELS_URL: 'http://leak-models.test',
+        SAFE_CUSTOM_VAR: 'safe-value',
+      };
+      const leakRegistry = createAgentRegistry();
+      const leakGenCode = leakRegistry.adapter('gencode');
+      const leakOpenCode = leakRegistry.adapter('opencode');
+
+      // Obtenemos el serveEnv resuelto a través de registry.composedEnvironment
+      const gcEnv = leakGenCode['_serveEnv']();
+
+      check('8.4 GenCode serveEnv a través de registry elimina OPENCODE_DB',
+        gcEnv['OPENCODE_DB'] === undefined, show(gcEnv['OPENCODE_DB']));
+      check('8.5 GenCode serveEnv a través de registry elimina OPENCODE_MODELS_*',
+        gcEnv['OPENCODE_MODELS_PATH'] === undefined && gcEnv['OPENCODE_MODELS_URL'] === undefined);
+      check('8.6 GenCode serveEnv conserva variables seguras',
+        gcEnv['SAFE_CUSTOM_VAR'] === 'safe-value');
+
+      const ocEnv = leakOpenCode['_serveEnv']();
+      check('8.7 OpenCode serveEnv conserva OPENCODE_DB (comportamiento original)',
+        ocEnv['OPENCODE_DB'] === '/tmp/leak-opencode.db');
+
+      for (const { adapter } of leakRegistry.all()) {
+        await adapter.dispose?.();
+      }
+    } finally {
+      process.env = origEnv;
+    }
+
+    // 8.8 - 8.9 Verificamos beforeLaunch con GenCode y OpenCode (review指摘 4)
+    const fakeLaunchInput = {
+      location: fakeLoc,
+      cwd: tempDir,
+      project: null,
+      terminalId: 't1',
+    };
+    const gcTermEnv = {
+      OPENCODE_DB: '/tmp/test.db',
+      OPENCODE_MODELS_PATH: '/tmp/models.json',
+      OPENCODE_SERVER_PASSWORD: 'secret-pass',
+      OPENCODE_PASSWORD: 'secret-pass',
+      TERM: 'xterm-256color',
+    };
+    await gencode.beforeLaunch(fakeLaunchInput, gcTermEnv);
+    check('8.8 GenCode beforeLaunch elimina variables OPENCODE_* de terminalEnv',
+      gcTermEnv['TERM'] === 'xterm-256color' &&
+      gcTermEnv['OPENCODE_DB'] === undefined &&
+      gcTermEnv['OPENCODE_MODELS_PATH'] === undefined &&
+      gcTermEnv['OPENCODE_SERVER_PASSWORD'] === undefined &&
+      gcTermEnv['OPENCODE_PASSWORD'] === undefined);
+
+    const ocTermEnv = {
+      OPENCODE_DB: '/tmp/test.db',
+      TERM: 'xterm-256color',
+    };
+    const ocLaunchInput = {
+      location: { ...fakeLoc, version: '1.0.0' },
+      cwd: tempDir,
+      project: null,
+      terminalId: 't2',
+    };
+    const opencodeAdapter = registry.adapter('opencode');
+    await opencodeAdapter.beforeLaunch(ocLaunchInput, ocTermEnv);
+    check('8.9 OpenCode beforeLaunch mantiene OPENCODE_DB',
+      ocTermEnv['OPENCODE_DB'] === '/tmp/test.db' && ocTermEnv['TERM'] === 'xterm-256color');
 
     for (const { adapter } of registry.all()) {
       await adapter.dispose?.();

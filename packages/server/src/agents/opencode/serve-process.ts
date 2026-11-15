@@ -110,8 +110,10 @@ export interface ServeProcessOptions {
   listeningCommandName?: string;
   /** Nombre para los logs de depuración (por defecto 'opencode-serve'). */
   debugName?: string;
-  /** Usuario por defecto para Basic Auth, para ocultarlo en los errores. */
+  /** Usuario por defecto para Basic Auth (por defecto 'opencode'). */
   defaultUsername?: string;
+  /** Si es true, oculta el nombre de usuario en los errores (redaction). Por defecto false. */
+  redactUsername?: boolean;
 }
 
 /**
@@ -419,10 +421,24 @@ export class OpenCodeServeProcess {
     return env;
   }
 
+  private effectiveUsername(): string | undefined {
+    const env = this.options.baseEnv();
+    let envUser = env['OPENCODE_SERVER_USERNAME'];
+    if (envUser === undefined && this.platform === 'win32') {
+      const found = Object.keys(env).find((k) => k.toUpperCase() === 'OPENCODE_SERVER_USERNAME');
+      if (found !== undefined) envUser = env[found];
+    }
+    if (envUser !== undefined && envUser.trim().length > 0) return envUser.trim();
+    return this.options.defaultUsername;
+  }
+
   private redact(text: string): string {
     let result = text.split(this.password).join('***');
-    if (this.options.defaultUsername !== undefined && this.options.defaultUsername.length > 0) {
-      result = result.split(this.options.defaultUsername).join('***');
+    if (this.options.redactUsername === true) {
+      const username = this.effectiveUsername();
+      if (username !== undefined && username.length > 0 && username !== 'opencode') {
+        result = result.split(username).join('***');
+      }
     }
     return result;
   }

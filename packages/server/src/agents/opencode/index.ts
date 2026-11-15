@@ -231,6 +231,7 @@ export interface OpenCodeFamilyConfig {
   missingMessage?: () => ServerText;
   startupHistoryNote?: (cliAvailable: boolean) => string | null;
   defaults?: () => Promise<any | null>;
+  redactUsername?: boolean;
 }
 
 export const OPENCODE_FAMILY_CONFIG: OpenCodeFamilyConfig = {
@@ -261,6 +262,7 @@ export const GENCODE_FAMILY_CONFIG: OpenCodeFamilyConfig = {
   input: GENCODE_INPUT,
   includeUsername: true,
   historyOnly: false,
+  redactUsername: true,
   cleanTerminalEnv: (terminalEnv: Record<string, string>) => {
     const TARGETS = new Set([
       'OPENCODE_DB',
@@ -278,7 +280,7 @@ export const GENCODE_FAMILY_CONFIG: OpenCodeFamilyConfig = {
   },
   missingMessage: () =>
     serverText('raw', {
-      text: 'GenCode CLI ("gencode") was not found in PATH. Make sure "gencode" is installed and available in PATH (see https://www.genspark.ai).',
+      text: 'GenCode CLI ("gencode") was not found in PATH. Please install "gencode" and ensure it is available in your PATH (official site: https://www.genspark.ai).',
     }),
 };
 
@@ -315,7 +317,7 @@ function copyEnvironment(base: NodeJS.ProcessEnv): Record<string, string> {
 export function createOpenCodeFamilyAdapter(
   config: OpenCodeFamilyConfig,
   options: OpenCodeAdapterOptions = {},
-): AgentAdapter {
+): AgentAdapter & { _serveEnv?: () => Record<string, string> } {
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
   const sqlite = options.sqlite ?? loadSqlite;
@@ -399,6 +401,7 @@ export function createOpenCodeFamilyAdapter(
       listeningCommandName: config.listeningCommandName,
       debugName: `${config.id}-serve`,
       defaultUsername: config.serveDefaultUsername,
+      redactUsername: config.redactUsername ?? false,
       cwd: config.serveCwdName ? path.join(tmpdir(), 'agent-workbench', config.serveCwdName) : undefined,
     });
     /*
@@ -612,6 +615,9 @@ export function createOpenCodeFamilyAdapter(
       schemaDb.close();
       return serve?.dispose() ?? Promise.resolve();
     },
+
+    /** @internal Para el chequeo: entorno con el que arrancaría el serve. */
+    _serveEnv: serveEnv,
   };
 }
 

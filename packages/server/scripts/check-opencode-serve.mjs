@@ -330,6 +330,17 @@ const HEX48 = /^[0-9a-f]{48}$/;
   check('O2 salida temprana: el error dice que salio y trae la cola de stderr',
     early.error instanceof Error && early.message.includes('exited before listening') && early.message.includes('no se pudo abrir la base'), early.message);
   check('O2 ... sin la contrasena: queda ***', HEX48.test(early.password) && !early.message.includes(early.password) && early.message.includes('***'));
+
+  // Redaction preserva nombres comunes de diagnóstico (como 'opencode')
+  const testProc = makeServe();
+  testProc['password'] = 'my-secret-48-hex-string-for-testing-purpose-12345';
+  const sampleLog = 'opencode error: unable to open ~/.local/share/opencode/opencode.db (pass: my-secret-48-hex-string-for-testing-purpose-12345)';
+  const redactedSample = testProc['redact'](sampleLog);
+  check('O2 redact solo oculta password y preserva la palabra opencode intacta',
+    redactedSample.includes('opencode error') &&
+    redactedSample.includes('~/.local/share/opencode/opencode.db') &&
+    !redactedSample.includes('my-secret-48-hex-string-for-testing-purpose-12345') &&
+    redactedSample.includes('***'));
 }
 
 // ---------------------------------------------------------------------------
