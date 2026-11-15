@@ -885,8 +885,8 @@ await adapter.locate();
     Codex, OpenCode y Pi; Antigravity, solo con su status line (aca no la tiene).
   */
   const scheduling = AGENT_IDS.filter((id) => appRegistry.adapter(id).capabilities.scheduledSend);
-  check('51.2 scheduledSend: claude-code, codex, opencode, pi y gencode (antigravity sin status line, no)',
-    sameShape(scheduling, ['claude-code', 'codex', 'opencode', 'pi', 'gencode']), scheduling.join(','));
+  check('51.2 scheduledSend: claude-code, codex, opencode y pi (antigravity sin status line y gencode sin verificar, no)',
+    sameShape(scheduling, ['claude-code', 'codex', 'opencode', 'pi']), scheduling.join(','));
   check('51.2 la que lo declara espera "lista" con su senal y dice si otro proceso tiene la conversacion, o declara como se le manda (52)',
     AGENT_IDS.every((id) => {
       const registered = appRegistry.adapter(id);
@@ -897,10 +897,10 @@ await adapter.locate();
     }));
   check('52.1 Claude Code sigue por su senal de "lista" (51): no declara `scheduled`',
     appRegistry.adapter('claude-code').scheduled === undefined);
-  check('52.1 Codex, Pi y Antigravity por su pantalla; OpenCode y GenCode por su API',
+  check('52.1 Codex, Pi y Antigravity por su pantalla; OpenCode por su API; GenCode no declara (no verificado)',
     appRegistry.adapter('codex').scheduled?.kind === 'screen' && appRegistry.adapter('pi').scheduled?.kind === 'screen' &&
     appRegistry.adapter('antigravity').scheduled?.kind === 'screen' && appRegistry.adapter('opencode').scheduled?.kind === 'api' &&
-    appRegistry.adapter('gencode').scheduled?.kind === 'api');
+    appRegistry.adapter('gencode').scheduled === undefined);
   check('52.1 la que no publica su estado (Codex) dice el turno abierto de su historial',
     AGENT_IDS.every((id) => {
       const registered = appRegistry.adapter(id);
@@ -912,12 +912,12 @@ await adapter.locate();
     por su `serve`; Pi la copia y Antigravity sigue trabajando en la principal.
   */
   const moving = AGENT_IDS.filter((id) => appRegistry.adapter(id).capabilities.moveToWorktree);
-  check('55 moveToWorktree: claude-code, codex, opencode y gencode', sameShape(moving, ['claude-code', 'codex', 'opencode', 'gencode']), moving.join(','));
+  check('55 moveToWorktree: claude-code, codex y opencode (gencode sin verificar, no)', sameShape(moving, ['claude-code', 'codex', 'opencode']), moving.join(','));
   check('54.2 Claude Code sigue el archivo sin reabrirlo (retarget); las demas, con un seguidor nuevo',
     typeof appRegistry.adapter('claude-code').history.follow({ cwd: home, sessionId: 'x' }).retarget === 'function');
   const movers = AGENT_IDS.filter((id) => appRegistry.adapter(id).sessionMove !== undefined);
-  check('55 la conversacion la pasa la CLI (sessionMove) en OpenCode y GenCode, y solo con la capacidad',
-    sameShape(movers, ['opencode', 'gencode']) && movers.every((id) => appRegistry.adapter(id).capabilities.moveToWorktree), movers.join(','));
+  check('55 la conversacion la pasa la CLI (sessionMove) en OpenCode (y solo con la capacidad)',
+    sameShape(movers, ['opencode']) && movers.every((id) => appRegistry.adapter(id).capabilities.moveToWorktree), movers.join(','));
   check('55 la que se muda sin publicar su estado (Codex) dice el turno abierto de su historial: el candado lo mira',
     moving.every((id) => {
       const registered = appRegistry.adapter(id);

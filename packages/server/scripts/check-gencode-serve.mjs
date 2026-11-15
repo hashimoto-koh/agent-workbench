@@ -233,6 +233,40 @@ const fakeLocation = {
     redactedDefault === 'auth failure for user test-user-name with pass ***',
     redactedDefault);
 
+  // Verificamos que effectiveUsername unifica la resolución de usuario entre start y redact
+  const procEffective = new OpenCodeServeProcess({
+    location: fakeLocation,
+    baseEnv: () => ({ OPENCODE_SERVER_USERNAME: 'bob' }),
+    listeningCommandName: 'gencode',
+    defaultUsername: 'custom-default',
+  });
+  check('4 effectiveUsername usa OPENCODE_SERVER_USERNAME si está presente',
+    procEffective['effectiveUsername']() === 'bob');
+
+  const procEffectiveFallback = new OpenCodeServeProcess({
+    location: fakeLocation,
+    baseEnv: () => ({ OPENCODE_SERVER_USERNAME: '   ' }),
+    listeningCommandName: 'gencode',
+    defaultUsername: 'custom-default',
+  });
+  check('4 effectiveUsername con whitespace en OPENCODE_SERVER_USERNAME cae a OPENCODE_SERVE_DEFAULT_USERNAME',
+    procEffectiveFallback['effectiveUsername']() === 'opencode');
+
+  const procEffectiveDefault = new OpenCodeServeProcess({
+    location: fakeLocation,
+    baseEnv: () => ({}),
+    listeningCommandName: 'gencode',
+    defaultUsername: 'custom-default',
+    redactUsername: true,
+  });
+  procEffectiveDefault['password'] = 'test-secret-pass';
+  check('4 effectiveUsername sin env usa OPENCODE_SERVE_DEFAULT_USERNAME (no usa custom defaultUsername para auth)',
+    procEffectiveDefault['effectiveUsername']() === 'opencode');
+  const redactedFallback = procEffectiveDefault['redact']('auth failure for user custom-default with pass test-secret-pass');
+  check('4 redact con redactUsername: true oculta también defaultUsername como fallback de error',
+    redactedFallback === 'auth failure for user *** with pass ***',
+    redactedFallback);
+
   // Redaction con redactUsername: true oculta tanto password como username cuando es personalizado
   const procRedactUser = new OpenCodeServeProcess({
     location: fakeLocation,
@@ -354,6 +388,69 @@ const fakeLocation = {
 
   await Promise.all([ocProc.dispose(), gnProc.dispose()]);
   check('5 dispose termina ambos procesos sin dejar huérfanos', true);
+}
+
+// ---------------------------------------------------------------------------
+// 6. Integración de autenticación end-to-end (custom username y protocolo 2)
+// ---------------------------------------------------------------------------
+{
+  // 6.1 GenCode con OPENCODE_SERVER_USERNAME=alice: endpoint, Basic Auth HTTP y attach --username coinciden
+  const aliceProc = new OpenCodeServeProcess({
+    location: fakeLocation,
+    baseEnv: () => ({
+      FAKE_SERVE_COMMAND_NAME: 'gencode',
+      OPENCODE_SERVER_USERNAME: 'alice',
+    }),
+    listeningCommandName: 'gencode',
+    debugName: 'gencode-serve',
+    cwd: defaultGenCodeServeCwd(),
+  });
+  const aliceEp = await aliceProc.ensure();
+  const authHeader = 'Basic ' + Buffer.from(`alice:${aliceEp.password}`).toString('base64');
+  const httpRes = await fetch(`${aliceEp.url}/__fake/requests`, {
+    headers: { Authorization: authHeader },
+  });
+  check('6.1 endpoint.username y Basic Auth HTTP coinciden con OPENCODE_SERVER_USERNAME=alice',
+    aliceEp.username === 'alice' && httpRes.status === 200,
+    `username=${aliceEp.username}, status=${httpRes.status}`);
+  await aliceProc.dispose();
+
+  // 6.2 Adapter launch completo propagando OPENCODE_SERVER_USERNAME=alice hasta attach --username
+  const aliceAdapter = createGenCodeAdapter({
+    home: defaultGenCodeServeCwd(),
+    platform: 'linux',
+    serveEnv: () => ({
+      FAKE_SERVE_COMMAND_NAME: 'gencode',
+      OPENCODE_SERVER_USERNAME: 'alice',
+    }),
+  });
+  const plan = await aliceAdapter.launch({
+    location: fakeLocation,
+    cwd: '.',
+    resumeSessionId: null,
+    proposedSessionId: '00000000-0000-4000-8000-000000000010',
+    launchToken: 'tok-alice',
+  });
+  const userIdx = plan.args.indexOf('--username');
+  check('6.2 adapter.launch propaga OPENCODE_SERVER_USERNAME=alice a attach --username',
+    userIdx !== -1 && plan.args[userIdx + 1] === 'alice',
+    show(plan.args));
+  await aliceAdapter.dispose();
+
+  // 6.3 Protocolo 2 (OpenCode 2.x) siempre usa OPENCODE_SERVE_DEFAULT_USERNAME ('opencode') aunque haya defaultUsername o env
+  const v2Proc = new OpenCodeServeProcess({
+    location: { ...fakeLocation, version: '2.0.0' },
+    baseEnv: () => ({
+      FAKE_SERVE_COMMAND_NAME: 'opencode',
+      OPENCODE_SERVER_USERNAME: 'alice',
+    }),
+    listeningCommandName: 'opencode',
+    defaultUsername: 'custom-default',
+    debugName: 'opencode-serve',
+    cwd: defaultServeCwd(),
+  });
+  check('6.3 protocolo 2 ignora custom defaultUsername y OPENCODE_SERVER_USERNAME, mantiene opencode',
+    v2Proc['effectiveUsername']() === 'opencode');
 }
 
 if (failures > 0) {

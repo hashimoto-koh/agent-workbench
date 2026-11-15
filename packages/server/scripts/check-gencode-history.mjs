@@ -1,21 +1,22 @@
 /**
- * Chequeo de capacidades mínimas, aislamiento de historial e invariantes
- * de GenCode en la Fase 5.
+ * Chequeo de capacidades, aislamiento de historial, ejecución y ubicación
+ * de GenCode (Fase 6).
  *
  *   npx tsx scripts/check-gencode-history.mjs
  *
  * Verifica:
- *   1. Capacidades mínimas de la Fase 5 (todo false/null excepto lectura de historial).
- *   2. Configuración de entrada (GENCODE_INPUT): imageReference null, transcriptReference 'quoted-path'.
- *   3. Bloqueo estricto de locate() y launch() en Fase 5 (historyOnly: true).
+ *   1. Capacidades medidas y seguras (scheduledSend y moveToWorktree en false hasta verificación).
+ *   2. Configuración de entrada (GENCODE_INPUT): imageReference bare-path-paste, transcriptReference 'quoted-path'.
+ *   3. locate() y launch() activos con CLI independiente (fixture seguro sin requerir instalación en host).
  *   4. startupHistoryNote con base existente, ausente, sqlite unavailable y note personalizada.
  *   5. protectedDirs apunta a las carpetas propias de gencode y no de opencode.
  *   6. Lectura aislada de historial con fixture sintético de GenCode (scan y follow).
  *   7. Coexistencia de OpenCode y GenCode con bases separadas sin interferencia.
+ *   8. Unificación de canonical paths y symlinks en proyectos y reubicaciones.
  */
 
 import assert from 'node:assert';
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,11 +41,30 @@ const check = (label, ok, extra = '') => {
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const show = (obj) => JSON.stringify(obj);
 
+/** Helper para crear enlaces de directorios con soporte para Windows junction */
+async function createDirectoryLink(target, linkPath) {
+  const type = process.platform === 'win32' ? 'junction' : 'dir';
+  try {
+    await symlink(target, linkPath, type);
+    return true;
+  } catch {
+    if (process.platform === 'win32') {
+      try {
+        await symlink(target, linkPath, 'dir');
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  }
+}
+
 const tempDir = await mkdtemp(path.join(os.tmpdir(), 'aw-gencode-history-'));
 
 try {
   // ---------------------------------------------------------------------------
-  // 1. Capacidades mínimas y configuración de entrada (Fase 5)
+  // 1. Capacidades medidas y configuración de entrada
   // ---------------------------------------------------------------------------
   {
     const adapter = createGenCodeAdapter({ home: tempDir, platform: 'linux' });
@@ -54,7 +74,7 @@ try {
     check('1.3 command es gencode', adapter.command === 'gencode');
     check('1.4 installUrl apunta al sitio oficial', adapter.installUrl === 'https://www.genspark.ai');
 
-    check('1.5 capabilities de Fase 6 con valores medidos', same(adapter.capabilities, {
+    check('1.5 capabilities con valores seguros y medidos', same(adapter.capabilities, {
       sessionIdAtLaunch: true,
       resume: true,
       statusSource: true,
@@ -72,9 +92,9 @@ try {
       waitingBlocksSubmit: true,
       forceSend: false,
       editQueue: false,
-      scheduledSend: true,
+      scheduledSend: false,
       codexNativeQueue: false,
-      moveToWorktree: true,
+      moveToWorktree: false,
       readOnlyLaunch: null,
     }), show(adapter.capabilities));
 
@@ -88,20 +108,80 @@ try {
     }), show(adapter.input));
 
     check('1.7 promptQueue desde session', same(adapter.promptQueue, { source: 'session', forceSend: null }));
-    check('1.8 sessionMove definida en Fase 6', adapter.sessionMove !== undefined && typeof adapter.sessionMove.move === 'function');
-    check('1.9 scheduled definida con kind api en Fase 6', adapter.scheduled !== undefined && adapter.scheduled.kind === 'api');
+    check('1.8 sessionMove deshabilitado por seguridad (sin verificar en CLI)', adapter.sessionMove === undefined);
+    check('1.9 scheduled deshabilitado por seguridad (sin verificar en CLI)', adapter.scheduled === undefined);
 
     await adapter.dispose();
   }
 
   // ---------------------------------------------------------------------------
-  // 2. locate() y launch() activos en Fase 6 (historyOnly: false)
+  // 2. locate() y launch() activos (con CLI simulada independiente del host)
   // ---------------------------------------------------------------------------
   {
-    const adapter = createGenCodeAdapter({ home: tempDir, platform: 'linux' });
+    const fakeBinDir = path.join(tempDir, 'fake-bin');
+    await mkdir(fakeBinDir, { recursive: true });
+    const isWin = process.platform === 'win32';
+    const fakeCliFile = path.join(fakeBinDir, isWin ? 'gencode.cmd' : 'gencode');
+    if (isWin) {
+      await writeFile(fakeCliFile, '@echo 1.19.3-gencode.6\r\n');
+    } else {
+      await writeFile(fakeCliFile, '#!/bin/sh\necho 1.19.3-gencode.6\n');
+      await chmod(fakeCliFile, 0o755);
+    }
 
-    const located = await adapter.locate();
-    check('2.1 locate encuentra gencode en PATH', located !== null && located.resolvedPath.endsWith('gencode'));
+    const origPath = process.env['PATH'];
+    const origPathWin = process.env['Path'];
+
+    try {
+      // 2.1 Con fake-bin en PATH: locate encuentra gencode y lee versión
+      process.env['PATH'] = fakeBinDir;
+      if (isWin) process.env['Path'] = fakeBinDir;
+
+      const adapter = createGenCodeAdapter({ home: tempDir, platform: process.platform });
+      const located = await adapter.locate();
+      check('2.1 locate encuentra gencode en PATH controlado',
+        located !== null &&
+        located.resolvedPath.includes('gencode') &&
+        located.version === '1.19.3-gencode.6',
+        show(located));
+      await adapter.dispose();
+
+      // 2.1b Sin CLI en PATH: locate devuelve null
+      const emptyBinDir = path.join(tempDir, 'empty-bin');
+      await mkdir(emptyBinDir, { recursive: true });
+      process.env['PATH'] = emptyBinDir;
+      if (isWin) process.env['Path'] = emptyBinDir;
+
+      const notFoundAdapter = createGenCodeAdapter({ home: tempDir, platform: process.platform });
+      const notFound = await notFoundAdapter.locate();
+      check('2.1b locate sin CLI en PATH devuelve null', notFound === null);
+      await notFoundAdapter.dispose();
+
+      // 2.1c CLI en PATH pero --version falla (exit != 0): devuelve CliLocation con version: null
+      const badVerBinDir = path.join(tempDir, 'bad-ver-bin');
+      await mkdir(badVerBinDir, { recursive: true });
+      const badVerCli = path.join(badVerBinDir, isWin ? 'gencode.cmd' : 'gencode');
+      if (isWin) {
+        await writeFile(badVerCli, '@exit /b 1\r\n');
+      } else {
+        await writeFile(badVerCli, '#!/bin/sh\nexit 1\n');
+        await chmod(badVerCli, 0o755);
+      }
+      process.env['PATH'] = badVerBinDir;
+      if (isWin) process.env['Path'] = badVerBinDir;
+
+      const badVerAdapter = createGenCodeAdapter({ home: tempDir, platform: process.platform });
+      const badVerLocated = await badVerAdapter.locate();
+      check('2.1c locate con fallo de --version devuelve ubicación con version: null',
+        badVerLocated !== null &&
+        badVerLocated.resolvedPath.includes('gencode') &&
+        badVerLocated.version === null,
+        show(badVerLocated));
+      await badVerAdapter.dispose();
+    } finally {
+      process.env['PATH'] = origPath;
+      if (isWin && origPathWin !== undefined) process.env['Path'] = origPathWin;
+    }
 
     const historyOnlyAdapter = createOpenCodeFamilyAdapter({
       ...GENCODE_FAMILY_CONFIG,
@@ -118,7 +198,7 @@ try {
         launchToken: 'tok1',
       });
     } catch (e) {
-      rejected = e instanceof Error && e.message.includes('GenCode launch is disabled in Phase 5');
+      rejected = e instanceof Error && e.message.includes('GenCode launch is disabled when historyOnly is enabled');
     }
     check('2.3 launch con historyOnly rechaza con error explícito', rejected);
 
@@ -154,7 +234,6 @@ try {
       show(launchPlan.args));
 
     await activeAdapter.dispose();
-    await adapter.dispose();
   }
 
   // ---------------------------------------------------------------------------
@@ -362,7 +441,12 @@ try {
     const realDir = path.join(tempDir, 'canonical-project');
     const linkDir = path.join(tempDir, 'symlink-project');
     await mkdir(realDir, { recursive: true });
-    await symlink(realDir, linkDir, 'dir');
+    const linkCreated = await createDirectoryLink(realDir, linkDir);
+
+    if (!linkCreated) {
+      console.log('SKIP 7.1-7.7 enlaces de directorio (symlink/junction) no permitidos en este entorno');
+    } else {
+      const expectedReal = await realpath(realDir);
 
     const sessions = [
       {
@@ -404,7 +488,7 @@ try {
     ];
 
     // canonicalOf simula lo que hace SessionIndex.learnSingleCwd (realpath de linkDir es realDir)
-    const canonicalMap = (cwd) => (cwd === linkDir ? realDir : cwd);
+    const canonicalMap = (cwd) => (cwd === linkDir ? expectedReal : cwd);
     const projects = buildProjects(
       sessions,
       process.platform,
@@ -424,14 +508,14 @@ try {
     const index = new SessionIndex(testRegistry);
     await index['learnCwd'](linkDir);
     check('7.3 SessionIndex aprende la ruta real del symlink',
-      index['canonicalOf'](linkDir) === realDir,
+      index['canonicalOf'](linkDir) === expectedReal,
       `canonicalOf(${linkDir}) = ${index['canonicalOf'](linkDir)}`);
 
     // 7.4 relocation con symlink y realpath unifica fromKey canónico en una sola entrada (review指摘 2)
     const relFromLink = path.join(tempDir, 'relocation-link');
     const relFromReal = path.join(tempDir, 'relocation-real');
     await mkdir(relFromReal, { recursive: true });
-    await symlink(relFromReal, relFromLink, 'dir');
+    await createDirectoryLink(relFromReal, relFromLink);
     const relTo = path.join(tempDir, 'relocation-target');
     await mkdir(relTo, { recursive: true });
 
@@ -523,10 +607,165 @@ try {
       show({ resolvedReverse, relocateReverse }));
     indexReverse.dispose();
 
-    for (const { adapter } of testRegistry.all()) {
-      await adapter.dispose?.();
+      // 7.6 Múltiples alias, eliminación de enlace y cambio de destino (4章)
+      const linkDir2 = path.join(tempDir, 'symlink-project-2');
+      const realDirB = path.join(tempDir, 'canonical-project-b');
+      await mkdir(realDirB, { recursive: true });
+      const link2Created = await createDirectoryLink(realDir, linkDir2);
+      if (!link2Created) {
+        console.log('SKIP 7.6-7.7c: no fue posible crear el segundo symlink/junction');
+      } else {
+        await index['learnCwd'](linkDir2);
+        const aliasesBefore = index['realToCwds'].get(expectedReal);
+        check('7.6 SessionIndex registra múltiples alias para el mismo realpath',
+          aliasesBefore !== undefined && aliasesBefore.has(linkDir) && aliasesBefore.has(linkDir2),
+          show(aliasesBefore ? [...aliasesBefore] : null));
+
+        // Eliminamos linkDir2 y reaprendemos con fresh=true -> se limpia el alias borrado
+        await rm(linkDir2);
+        await index['learnCwd'](linkDir2, true);
+        const aliasesAfterDelete = index['realToCwds'].get(expectedReal);
+        check('7.6b al eliminar un enlace, learnCwd(fresh=true) limpia el alias obsoleto',
+          aliasesAfterDelete !== undefined && aliasesAfterDelete.has(linkDir) && !aliasesAfterDelete.has(linkDir2),
+          show(aliasesAfterDelete ? [...aliasesAfterDelete] : null));
+
+        // Reapuntamos linkDir2 hacia realDirB y reaprendemos con fresh=true
+        const link2Retargeted = await createDirectoryLink(realDirB, linkDir2);
+        if (!link2Retargeted) {
+          console.log('SKIP 7.7-7.7c: no fue posible recrear symlink/junction hacia realDirB');
+        } else {
+          const expectedRealB = await realpath(realDirB);
+          await index['learnCwd'](linkDir2, true);
+          const aliasesForB = index['realToCwds'].get(expectedRealB);
+          check('7.7 al cambiar destino de enlace, fresh=true actualiza realToCwds hacia el nuevo realpath',
+            aliasesForB !== undefined && aliasesForB.has(linkDir2) &&
+            index['canonicalOf'](linkDir2) === expectedRealB &&
+            !(index['realToCwds'].get(expectedReal)?.has(linkDir2) ?? false),
+            show({ aliasesForB: aliasesForB ? [...aliasesForB] : null }));
+
+          // 7.7c Cambio de destino de symlink actualiza cwdRelocation (antiguo realpath deja de usar relocation obsoleta)
+          const linkReloc = path.join(tempDir, 'symlink-reloc-target');
+          const relocTargetA = path.join(tempDir, 'reloc-target-a');
+          const relocTargetB = path.join(tempDir, 'reloc-target-b');
+          const movedDestA = path.join(tempDir, 'moved-dest-a');
+          const movedDestB = path.join(tempDir, 'moved-dest-b');
+          await mkdir(relocTargetA, { recursive: true });
+          await mkdir(relocTargetB, { recursive: true });
+          await mkdir(movedDestA, { recursive: true });
+          await mkdir(movedDestB, { recursive: true });
+          const linkRelocCreated = await createDirectoryLink(relocTargetA, linkReloc);
+          if (!linkRelocCreated) {
+            console.log('SKIP 7.7c: no fue posible crear symlink para prueba de relocation');
+          } else {
+            const realRelocA = await realpath(relocTargetA);
+            const realRelocB = await realpath(relocTargetB);
+            const relocStore = {
+              resolve: (cwd) => {
+                if (cwd === linkReloc) return { cwd: movedDestA, location: { from: linkReloc, to: movedDestA, createdAt: 1000 } };
+                if (cwd === realRelocB) return { cwd: movedDestB, location: { from: realRelocB, to: movedDestB, createdAt: 2000 } };
+                return null;
+              },
+            };
+            const idxReloc = new SessionIndex(testRegistry, undefined, undefined, undefined, relocStore);
+            await idxReloc['learnCwd'](linkReloc);
+            await idxReloc['learnCwd'](realRelocA);
+            const beforeRetarget = idxReloc['relocateOf'](realRelocA);
+            await rm(linkReloc);
+            await createDirectoryLink(relocTargetB, linkReloc);
+            await idxReloc['learnCwd'](linkReloc, true);
+            const afterRetargetOld = idxReloc['relocateOf'](realRelocA);
+            const afterRetargetNew = idxReloc['relocateOf'](realRelocB);
+            check('7.7c al cambiar destino de symlink, cwdRelocation del realpath anterior se limpia y no queda obsoleta',
+              beforeRetarget !== null && beforeRetarget.to === movedDestA &&
+              afterRetargetOld === null &&
+              afterRetargetNew !== null && afterRetargetNew.to === movedDestB,
+              show({ beforeRetarget, afterRetargetOld, afterRetargetNew }));
+            idxReloc.dispose();
+          }
+        }
+      }
+
+      // Verificamos que los cwd originales de las sesiones se preservan al mostrar/reanudar
+      check('7.7b el cwd de las sesiones individuales conserva la ruta original (symlink vs realpath)',
+        projects[0]?.sessions.some((s) => s.cwd === linkDir) &&
+        projects[0]?.sessions.some((s) => s.cwd === realDir));
+
+      for (const { adapter } of testRegistry.all()) {
+        await adapter.dispose?.();
+      }
+      indexWithLocations.dispose();
+      index.dispose();
     }
-    indexWithLocations.dispose();
+
+    // 7.8 Normalización de rutas Windows (drive letters, \\?\ y separadores) en buildProjects (P0-2)
+    {
+      const winSessions = [
+        {
+          agent: 'codex',
+          group: 'gw1',
+          cwd: 'C:\\Projects\\MyApp\\',
+          summary: {
+            agent: 'codex',
+            sessionId: 'ses_win_1',
+            cwd: 'C:\\Projects\\MyApp\\',
+            title: 'Win Upper',
+            titleSource: 'user',
+            updatedAt: 1000,
+            sizeBytes: 100,
+            archived: false,
+            storage: 'native',
+            partial: false,
+            worktree: null,
+          },
+        },
+        {
+          agent: 'gencode',
+          group: 'gw2',
+          cwd: '\\\\?\\c:/Projects/MyApp',
+          summary: {
+            agent: 'gencode',
+            sessionId: 'ses_win_2',
+            cwd: '\\\\?\\c:/Projects/MyApp',
+            title: 'Win Prefixed Lower',
+            titleSource: 'ai',
+            updatedAt: 2000,
+            sizeBytes: 200,
+            archived: false,
+            storage: 'native',
+            partial: false,
+            worktree: null,
+          },
+        },
+      ];
+      const winProjects = buildProjects(winSessions, 'win32', () => null, () => null);
+      check('7.8 buildProjects en win32 unifica C:\\Projects\\MyApp\\ y \\\\?\\c:/Projects/App conservando cwd original',
+        winProjects.length === 1 &&
+        winProjects[0]?.sessions.length === 2 &&
+        winProjects[0]?.sessions.some((s) => s.cwd === 'C:\\Projects\\MyApp\\') &&
+        winProjects[0]?.sessions.some((s) => s.cwd === '\\\\?\\c:/Projects/MyApp'),
+        show(winProjects));
+    }
+
+    // 7.9 relocateOf trata un `from` no aprendido (undefined en cwdExists) como paused=true sin envenenar caché
+    {
+      const unlearnedFrom = path.join(tempDir, 'never-existed-reloc-from');
+      const unlearnedTo = path.join(tempDir, 'dest-reloc-to');
+      await mkdir(unlearnedTo, { recursive: true });
+      const unlearnedRegistry = createAgentRegistry();
+      const idxUnlearned = new SessionIndex(unlearnedRegistry, undefined, undefined, undefined, {
+        resolve: (cwd) => cwd === unlearnedFrom
+          ? { cwd: unlearnedTo, location: { from: unlearnedFrom, to: unlearnedTo, createdAt: 1000 } }
+          : null,
+      });
+      const beforeLearn = idxUnlearned['relocateOf'](unlearnedFrom);
+      await idxUnlearned['learnCwd'](unlearnedFrom);
+      const afterLearn = idxUnlearned['relocateOf'](unlearnedFrom);
+      check('7.9 relocateOf con from no aprendido pausa sin envenenar caché y aplica tras learnCwd',
+        beforeLearn !== null && beforeLearn.paused === true &&
+        afterLearn !== null && afterLearn.paused === false && afterLearn.cwd === unlearnedTo,
+        show({ beforeLearn, afterLearn }));
+      idxUnlearned.dispose();
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -589,8 +828,11 @@ try {
       process.env = {
         ...origEnv,
         OPENCODE_DB: '/tmp/leak-opencode.db',
+        opencode_db: '/tmp/leak-lowercase.db',
         OPENCODE_MODELS_PATH: '/tmp/leak-models.json',
+        opencode_models_path: '/tmp/leak-lowercase-models.json',
         OPENCODE_MODELS_URL: 'http://leak-models.test',
+        OPENCODE_SERVER_USERNAME: 'custom-user',
         SAFE_CUSTOM_VAR: 'safe-value',
       };
       const leakRegistry = createAgentRegistry();
@@ -600,12 +842,12 @@ try {
       // Obtenemos el serveEnv resuelto a través de registry.composedEnvironment
       const gcEnv = leakGenCode['_serveEnv']();
 
-      check('8.4 GenCode serveEnv a través de registry elimina OPENCODE_DB',
-        gcEnv['OPENCODE_DB'] === undefined, show(gcEnv['OPENCODE_DB']));
-      check('8.5 GenCode serveEnv a través de registry elimina OPENCODE_MODELS_*',
-        gcEnv['OPENCODE_MODELS_PATH'] === undefined && gcEnv['OPENCODE_MODELS_URL'] === undefined);
-      check('8.6 GenCode serveEnv conserva variables seguras',
-        gcEnv['SAFE_CUSTOM_VAR'] === 'safe-value');
+      check('8.4 GenCode serveEnv a través de registry elimina OPENCODE_DB (incluyendo minúsculas)',
+        gcEnv['OPENCODE_DB'] === undefined && gcEnv['opencode_db'] === undefined, show(gcEnv['OPENCODE_DB']));
+      check('8.5 GenCode serveEnv a través de registry elimina OPENCODE_MODELS_* (incluyendo minúsculas)',
+        gcEnv['OPENCODE_MODELS_PATH'] === undefined && gcEnv['opencode_models_path'] === undefined && gcEnv['OPENCODE_MODELS_URL'] === undefined);
+      check('8.6 GenCode serveEnv conserva variables seguras y OPENCODE_SERVER_USERNAME',
+        gcEnv['SAFE_CUSTOM_VAR'] === 'safe-value' && gcEnv['OPENCODE_SERVER_USERNAME'] === 'custom-user');
 
       const ocEnv = leakOpenCode['_serveEnv']();
       check('8.7 OpenCode serveEnv conserva OPENCODE_DB (comportamiento original)',

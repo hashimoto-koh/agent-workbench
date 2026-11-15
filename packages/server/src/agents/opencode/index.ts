@@ -30,7 +30,7 @@
 import { existsSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
-import { serverText, type AgentCapabilities, type AgentId, type ServerText } from '@agent-workbench/shared';
+import { serverText, type AgentCapabilities, type AgentDefaults, type AgentId, type ServerText } from '@agent-workbench/shared';
 import type {
   AgentAdapter,
   AgentInput,
@@ -198,9 +198,10 @@ export const GENCODE_CAPABILITIES: AgentCapabilities = {
   waitingBlocksSubmit: true,
   forceSend: false,
   editQueue: false,
-  scheduledSend: true,
+  // Sin verificar en実機: en false hasta confirmar compatibilidad con la CLI de GenCode
+  scheduledSend: false,
   codexNativeQueue: false,
-  moveToWorktree: true,
+  moveToWorktree: false,
   readOnlyLaunch: null,
 };
 
@@ -226,11 +227,10 @@ export interface OpenCodeFamilyConfig {
   input: AgentInput;
   includeUsername?: boolean;
   historyOnly?: boolean;
-  serveEnv?: () => Record<string, string>;
   cleanTerminalEnv?: (env: Record<string, string>) => void;
   missingMessage?: () => ServerText;
   startupHistoryNote?: (cliAvailable: boolean) => string | null;
-  defaults?: () => Promise<any | null>;
+  defaults?: (cwd?: string, sessionModel?: string | null) => Promise<AgentDefaults | null>;
   redactUsername?: boolean;
 }
 
@@ -336,10 +336,17 @@ export function createOpenCodeFamilyAdapter(
   const serveEnv = (): Record<string, string> => {
     const base = copyEnvironment(rawServeEnv());
     if (config.id === 'gencode') {
-      delete base['OPENCODE_DB'];
+      const targets = new Set([
+        'OPENCODE_DB',
+      ]);
       if (!config.pathOptions.openCodeModelsEnv) {
-        delete base['OPENCODE_MODELS_PATH'];
-        delete base['OPENCODE_MODELS_URL'];
+        targets.add('OPENCODE_MODELS_PATH');
+        targets.add('OPENCODE_MODELS_URL');
+      }
+      for (const key of Object.keys(base)) {
+        if (targets.has(key.toUpperCase())) {
+          delete base[key];
+        }
       }
     }
     return base;
@@ -488,7 +495,7 @@ export function createOpenCodeFamilyAdapter(
      */
     launch(input: LaunchInput): Promise<LaunchPlan> {
       if (config.historyOnly) {
-        return Promise.reject(new Error(`${config.label} launch is disabled in Phase 5`));
+        return Promise.reject(new Error(`${config.label} launch is disabled when historyOnly is enabled`));
       }
       locatedProtocol = openCodeProtocol(input.location.version);
       return launchWithServe(
@@ -591,7 +598,7 @@ export function createOpenCodeFamilyAdapter(
     },
 
     // `opencode.json` no se abre (regla 2.1).
-    defaults: () => config.defaults ? config.defaults() : Promise.resolve(null),
+    defaults: (cwd, sessionModel) => config.defaults ? config.defaults(cwd, sessionModel) : Promise.resolve(null),
 
     /**
      * Las cuatro carpetas de OpenCode: datos (la base, `auth.json`),

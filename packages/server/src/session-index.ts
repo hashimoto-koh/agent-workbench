@@ -713,9 +713,10 @@ export class SessionIndex extends EventEmitter {
     const resolved = this.resolveLocation(cwd);
     if (resolved === null) return null;
     const { from, to } = resolved.location;
-    const paused = this.cwdExists.get(from) === true;
+    // Sin saber si `from` existe (`undefined`), no se aplica la reubicación para no ocultar una carpeta existente.
+    const paused = this.cwdExists.get(from) !== false;
     const rel: Relocation = { cwd: paused ? cwd : resolved.cwd, from, to, paused };
-    this.cwdRelocation.set(cwd, rel);
+    if (this.cwdExists.has(from)) this.cwdRelocation.set(cwd, rel);
     return rel;
   }
 
@@ -817,6 +818,12 @@ export class SessionIndex extends EventEmitter {
             if (this.realToCwds.get(oldResolved)?.size === 0) {
               this.realToCwds.delete(oldResolved);
             }
+            if (this.cwdRelocation.has(oldResolved)) {
+              this.cwdRelocation.delete(oldResolved);
+              if (this.cwdExists.has(oldResolved)) {
+                await this.learnRelocation(oldResolved, fresh);
+              }
+            }
           }
           if (resolved !== folder) {
             let aliases = this.realToCwds.get(resolved);
@@ -843,6 +850,12 @@ export class SessionIndex extends EventEmitter {
           this.realToCwds.get(oldResolved)?.delete(folder);
           if (this.realToCwds.get(oldResolved)?.size === 0) {
             this.realToCwds.delete(oldResolved);
+          }
+          if (this.cwdRelocation.has(oldResolved)) {
+            this.cwdRelocation.delete(oldResolved);
+            if (this.cwdExists.has(oldResolved)) {
+              await this.learnRelocation(oldResolved, fresh);
+            }
           }
         }
         this.cwdReal.set(folder, folder);

@@ -285,7 +285,7 @@ export class OpenCodeServeProcess {
 
     const env = this.environment();
     const protocol = openCodeProtocol(this.options.location.version);
-    const username = protocol === 2 ? OPENCODE_SERVE_DEFAULT_USERNAME : env['OPENCODE_SERVER_USERNAME'] || OPENCODE_SERVE_DEFAULT_USERNAME;
+    const username = this.effectiveUsername();
     const args = serveArgs(this.options.location);
     // Sin argumentos en el log (A4): la regla es la misma para todo log nuevo, aunque estos no traigan la contrasena.
     debugLog(this.debugName, 'launching serve');
@@ -421,23 +421,35 @@ export class OpenCodeServeProcess {
     return env;
   }
 
-  private effectiveUsername(): string | undefined {
+  /**
+   * Usuario efectivo del endpoint HTTP y Basic Auth.
+   * En protocolo 2 se usa siempre OPENCODE_SERVE_DEFAULT_USERNAME ('opencode').
+   * En protocolo 1 se usa OPENCODE_SERVER_USERNAME del entorno si no está vacío,
+   * o OPENCODE_SERVE_DEFAULT_USERNAME ('opencode') en caso contrario.
+   * `defaultUsername` se reserva únicamente como fallback de redaction de errores.
+   */
+  private effectiveUsername(): string {
+    const protocol = openCodeProtocol(this.options.location.version);
+    if (protocol === 2) return OPENCODE_SERVE_DEFAULT_USERNAME;
+
     const env = this.options.baseEnv();
     let envUser = env['OPENCODE_SERVER_USERNAME'];
     if (envUser === undefined && this.platform === 'win32') {
       const found = Object.keys(env).find((k) => k.toUpperCase() === 'OPENCODE_SERVER_USERNAME');
       if (found !== undefined) envUser = env[found];
     }
-    if (envUser !== undefined && envUser.trim().length > 0) return envUser.trim();
-    return this.options.defaultUsername;
+    if (envUser !== undefined && envUser.trim().length > 0) return envUser;
+    return OPENCODE_SERVE_DEFAULT_USERNAME;
   }
 
   private redact(text: string): string {
     let result = text.split(this.password).join('***');
     if (this.options.redactUsername === true) {
-      const username = this.effectiveUsername();
-      if (username !== undefined && username.length > 0 && username !== 'opencode') {
-        result = result.split(username).join('***');
+      const candidates = [this.effectiveUsername(), this.options.defaultUsername];
+      for (const candidate of candidates) {
+        if (candidate !== undefined && candidate.length > 0 && candidate !== OPENCODE_SERVE_DEFAULT_USERNAME) {
+          result = result.split(candidate).join('***');
+        }
       }
     }
     return result;
