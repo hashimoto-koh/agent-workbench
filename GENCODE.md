@@ -15,12 +15,12 @@ GenCode is a derivative of OpenCode 1.x. It is implemented as an independent age
 ## Isolation & Security
 
 1. **Storage & Database:**
-   - GenCode uses its own data directory under `gencode` (POSIX: `~/.local/share/gencode/opencode.db`, Windows: `%LOCALAPPDATA%\gencode\opencode.db`).
+   - GenCode uses its own data directory under `gencode` (default POSIX: `~/.local/share/gencode/opencode.db`, default Windows: `%USERPROFILE%\.local\share\gencode\opencode.db`, or `$XDG_DATA_HOME/gencode/opencode.db` when `XDG_DATA_HOME` is set).
    - OpenCode database settings (`OPENCODE_DB`) and OpenCode model caches (`OPENCODE_MODELS_*`) do not bleed into GenCode.
    - The database is accessed strictly read-only by Agent Workbench.
 
 2. **Serve Process & Credentials:**
-   - GenCode runs its own detached local server in a separate runtime directory (`~/.local/state/agent-workbench/gencode-serve`).
+   - GenCode runs its own detached local server in a separate empty working directory (`path.join(os.tmpdir(), 'agent-workbench', 'gencode-serve')`).
    - A distinct random 48-hex password and ephemeral localhost port are allocated.
    - If an error occurs, passwords and custom usernames are redacted (`***`) from stderr outputs to avoid leaking credentials, while preserving diagnostic paths like `opencode.db`.
    - The listening command recognition strictly expects `gencode server listening on...` and rejects lines from other CLIs.
